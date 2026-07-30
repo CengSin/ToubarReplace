@@ -1,0 +1,20 @@
+# macOS Finder metadata
+.DS_Store
+
+# Swift Package Manager build products and local state
+/.build/
+/Packages/
+/.swiftpm/configuration/
+.swiftpm/xcode/package.xcworkspace/
+
+# Xcode user-specific build data
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+
+# Locally generated release artifacts
+/dist/
+
+# Local credentials
+.netrc

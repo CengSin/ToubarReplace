@@ -1,0 +1,43 @@
+import CoreGraphics
+import Foundation
+@testable import ToubarReplace
+
+// Kept framework-free because this Command Line Tools installation does not
+// contain XCTest or the Swift Testing interop library. SwiftPM still compiles
+// this target, while the live display-stream check is performed with the app.
+func toubarReplaceGeometrySmokeTest() {
+    precondition(
+        TouchBarWindowMetrics.defaultSize == CGSize(width: 1_150, height: 35)
+    )
+    precondition(
+        TouchBarWindowMetrics.minimumSize.width
+            < TouchBarWindowMetrics.defaultSize.width
+    )
+    precondition(
+        TouchBarWindowMetrics.pixelSize(
+            forPointSize: CGSize(width: 1_150, height: 35),
+            backingScaleFactor: 2
+        ) == CGSize(width: 2_300, height: 70)
+    )
+    precondition(TouchBarCapture.minimumFramesPerSecond == 1)
+    precondition(TouchBarCapture.defaultFramesPerSecond == 12)
+    precondition(TouchBarCapture.maximumFramesPerSecond == 30)
+    precondition(
+        TouchBarSystemState.isControlStripExplicitlyEmpty(
+            fullCustomized: [],
+            miniCustomized: []
+        )
+    )
+    precondition(
+        !TouchBarSystemState.isControlStripExplicitlyEmpty(
+            fullCustomized: ["com.apple.system.volume"],
+            miniCustomized: []
+        )
+    )
+    precondition(
+        !TouchBarSystemState.isControlStripExplicitlyEmpty(
+            fullCustomized: nil,
+            miniCustomized: []
+        )
+    )
+}

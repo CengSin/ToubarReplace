@@ -3,8 +3,8 @@ import Foundation
 @testable import ToubarReplace
 
 // Kept framework-free because this Command Line Tools installation does not
-// contain XCTest or the Swift Testing interop library. SwiftPM still compiles
-// this target, while the live display-stream check is performed with the app.
+// expose XCTest or Swift Testing to macOS test targets. SwiftPM still compiles
+// the assertions together with the test target.
 func toubarReplaceGeometrySmokeTest() {
     precondition(
         TouchBarWindowMetrics.defaultSize == CGSize(width: 1_150, height: 35)
@@ -39,5 +39,34 @@ func toubarReplaceGeometrySmokeTest() {
             fullCustomized: nil,
             miniCustomized: []
         )
+    )
+    for contextualMode in [
+        "app",
+        "appWithControlStrip",
+        "quickActions",
+        "quickActionsWithControlStrip",
+        "workflows",
+        "workflowsWithControlStrip",
+    ] {
+        precondition(
+            TouchBarSystemState.allowsEmptyContent(
+                presentationMode: contextualMode
+            )
+        )
+    }
+    for fixedMode in [
+        "fullControlStrip",
+        "functionKeys",
+        "spaces",
+        "spacesWithControlStrip",
+    ] {
+        precondition(
+            !TouchBarSystemState.allowsEmptyContent(
+                presentationMode: fixedMode
+            )
+        )
+    }
+    precondition(
+        !TouchBarSystemState.allowsEmptyContent(presentationMode: nil)
     )
 }

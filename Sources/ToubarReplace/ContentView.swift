@@ -81,6 +81,14 @@ final class TouchBarSurfaceView: NSView {
         statusLabel.isHidden = true
     }
 
+    func display(notice: TouchBarCaptureNotice) {
+        statusLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        statusLabel.stringValue = notice.description
+        statusLabel.toolTip = notice.description
+        statusLabel.isHidden = false
+        addSubview(statusLabel, positioned: .above, relativeTo: imageView)
+    }
+
     func display(error: TouchBarCaptureError) {
         statusLabel.font = .systemFont(ofSize: 8, weight: .medium)
         statusLabel.stringValue = """
@@ -146,6 +154,11 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             onFrame: { [weak surfaceView] image in
                 Task { @MainActor in
                     surfaceView?.display(image: image)
+                }
+            },
+            onNotice: { [weak surfaceView] notice in
+                Task { @MainActor in
+                    surfaceView?.display(notice: notice)
                 }
             },
             onError: { [weak surfaceView] error in

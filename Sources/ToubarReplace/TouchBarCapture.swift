@@ -40,7 +40,30 @@ enum TouchBarCaptureError: LocalizedError, Equatable {
     }
 }
 
+enum TouchBarCaptureNotice: Equatable {
+    case contextualContentUnavailable
+
+    var description: String {
+        switch self {
+        case .contextualContentUnavailable:
+            return """
+            当前触控栏模式暂时没有可显示的内容
+            切换到支持触控栏的 App，或启用一个快速操作后会自动恢复
+            """
+        }
+    }
+}
+
 enum TouchBarSystemState {
+    private static let contextualPresentationModes: Set<String> = [
+        "app",
+        "appWithControlStrip",
+        "quickActions",
+        "quickActionsWithControlStrip",
+        "workflows",
+        "workflowsWithControlStrip",
+    ]
+
     static func isControlStripExplicitlyEmpty(
         fullCustomized: [Any]?,
         miniCustomized: [Any]?
@@ -58,6 +81,16 @@ enum TouchBarSystemState {
             miniCustomized: defaults?.array(forKey: "MiniCustomized")
         )
     }
+
+    static func allowsEmptyContent(presentationMode: String?) -> Bool {
+        guard let presentationMode else { return false }
+        return contextualPresentationModes.contains(presentationMode)
+    }
+
+    static var presentationMode: String? {
+        UserDefaults(suiteName: "com.apple.touchbar.agent")?
+            .string(forKey: "PresentationModeGlobal")
+    }
 }
 
 /// Mirrors the IOSurface frames produced by the private Touch Bar display
@@ -66,6 +99,7 @@ enum TouchBarSystemState {
 /// surface for every refresh.
 final class TouchBarCapture: @unchecked Sendable {
     typealias FrameHandler = @Sendable (CGImage) -> Void
+    typealias NoticeHandler = @Sendable (TouchBarCaptureNotice) -> Void
     typealias ErrorHandler = @Sendable (TouchBarCaptureError) -> Void
 
     static let minimumFramesPerSecond = 1
@@ -84,6 +118,7 @@ final class TouchBarCapture: @unchecked Sendable {
         .cacheIntermediates: false,
     ])
     private let onFrame: FrameHandler
+    private let onNotice: NoticeHandler
     private let onError: ErrorHandler
     private var frameIntervalNanoseconds: UInt64
     private var lastDeliveredAt: UInt64 = 0
@@ -92,18 +127,21 @@ final class TouchBarCapture: @unchecked Sendable {
     private var generation: UInt64 = 0
     private var initialTouchBarStatus: Int32?
     private var lastError: TouchBarCaptureError?
+    private var lastNotice: TouchBarCaptureNotice?
     private var consecutiveBlackFrames = 0
     private var hasLoggedFirstFrame = false
 
     init(
         framesPerSecond: Int = TouchBarCapture.defaultFramesPerSecond,
         onFrame: @escaping FrameHandler,
+        onNotice: @escaping NoticeHandler,
         onError: @escaping ErrorHandler
     ) {
         self.frameIntervalNanoseconds = Self.frameInterval(
             framesPerSecond: framesPerSecond
         )
         self.onFrame = onFrame
+        self.onNotice = onNotice
         self.onError = onError
     }
 
@@ -113,6 +151,7 @@ final class TouchBarCapture: @unchecked Sendable {
             self.stopped = false
             self.generation &+= 1
             self.lastError = nil
+            self.lastNotice = nil
             self.startStream(generation: self.generation)
         }
     }
@@ -133,6 +172,7 @@ final class TouchBarCapture: @unchecked Sendable {
             self.generation &+= 1
             self.stopStream(restoreTouchBarStatus: false)
             self.lastError = nil
+            self.lastNotice = nil
             self.startStream(generation: self.generation)
         }
     }
@@ -211,14 +251,7 @@ final class TouchBarCapture: @unchecked Sendable {
             let deliveredAt = DispatchTime.now().uptimeNanoseconds
             guard shouldDeliver(at: deliveredAt) else { return }
             guard !isNearlyBlack(surface) else {
-                consecutiveBlackFrames += 1
-                if consecutiveBlackFrames >= 2 {
-                    report(
-                        TouchBarSystemState.isControlStripExplicitlyEmpty
-                            ? .controlStripEmpty
-                            : .blackFrame
-                    )
-                }
+                handleBlankFrame()
                 return
             }
             guard let image = makeImage(from: surface) else {
@@ -228,6 +261,7 @@ final class TouchBarCapture: @unchecked Sendable {
 
             consecutiveBlackFrames = 0
             lastError = nil
+            lastNotice = nil
             lastDeliveredAt = deliveredAt
             onFrame(image)
             if !hasLoggedFirstFrame {
@@ -241,12 +275,7 @@ final class TouchBarCapture: @unchecked Sendable {
             }
 
         case .frameBlank:
-            consecutiveBlackFrames += 1
-            report(
-                TouchBarSystemState.isControlStripExplicitlyEmpty
-                    ? .controlStripEmpty
-                    : .blackFrame
-            )
+            handleBlankFrame()
 
         case .stopped:
             stream = nil
@@ -259,6 +288,24 @@ final class TouchBarCapture: @unchecked Sendable {
         @unknown default:
             break
         }
+    }
+
+    private func handleBlankFrame() {
+        consecutiveBlackFrames += 1
+        guard consecutiveBlackFrames >= 2 else { return }
+
+        if TouchBarSystemState.allowsEmptyContent(
+            presentationMode: TouchBarSystemState.presentationMode
+        ) {
+            reportNotice(.contextualContentUnavailable)
+            return
+        }
+
+        report(
+            TouchBarSystemState.isControlStripExplicitlyEmpty
+                ? .controlStripEmpty
+                : .blackFrame
+        )
     }
 
     private func shouldDeliver(at timestamp: UInt64) -> Bool {
@@ -344,9 +391,19 @@ final class TouchBarCapture: @unchecked Sendable {
     private func report(_ error: TouchBarCaptureError) {
         guard lastError != error else { return }
         lastError = error
+        lastNotice = nil
         Self.logger.error("\(error.localizedDescription, privacy: .public)")
         debugTrace("error: \(error.localizedDescription)")
         onError(error)
+    }
+
+    private func reportNotice(_ notice: TouchBarCaptureNotice) {
+        guard lastNotice != notice else { return }
+        lastNotice = notice
+        lastError = nil
+        Self.logger.info("\(notice.description, privacy: .public)")
+        debugTrace("notice: \(notice.description)")
+        onNotice(notice)
     }
 
     private func debugTrace(_ message: String) {

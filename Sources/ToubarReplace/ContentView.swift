@@ -30,6 +30,41 @@ struct TouchBarWindowMetrics {
     }
 }
 
+enum TouchBarIdleOpacity {
+    static let active: CGFloat = 1
+    static let idle: CGFloat = 0.3
+    static let delay: Duration = .seconds(5)
+}
+
+@MainActor
+final class TouchBarIdleOpacityController {
+    private weak var window: NSWindow?
+    private var idleTask: Task<Void, Never>?
+
+    init(window: NSWindow) {
+        self.window = window
+    }
+
+    func start() {
+        registerFrameActivity()
+    }
+
+    func stop() {
+        idleTask?.cancel()
+        idleTask = nil
+    }
+
+    func registerFrameActivity() {
+        idleTask?.cancel()
+        window?.alphaValue = TouchBarIdleOpacity.active
+        idleTask = Task { [weak self] in
+            try? await Task.sleep(for: TouchBarIdleOpacity.delay)
+            guard !Task.isCancelled else { return }
+            self?.window?.alphaValue = TouchBarIdleOpacity.idle
+        }
+    }
+}
+
 @MainActor
 final class TouchBarSurfaceView: NSView {
     private let statusLabel: NSTextField
@@ -107,6 +142,7 @@ final class TouchBarSurfaceView: NSView {
 final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private let surfaceView: TouchBarSurfaceView
     private let capture: TouchBarCapture
+    private let idleOpacityController: TouchBarIdleOpacityController
     private var hasRestoredFrame = false
     private var workspaceObservers: [NSObjectProtocol] = []
     private var isRunning = false
@@ -149,11 +185,14 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         )
         panel.setContentSize(initialSize)
 
+        let idleOpacityController = TouchBarIdleOpacityController(window: panel)
+        self.idleOpacityController = idleOpacityController
         capture = TouchBarCapture(
             framesPerSecond: TouchBarPreferences.displayFramesPerSecond,
-            onFrame: { [weak surfaceView] image in
+            onFrame: { [weak surfaceView, weak idleOpacityController] image in
                 Task { @MainActor in
                     surfaceView?.display(image: image)
+                    idleOpacityController?.registerFrameActivity()
                 }
             },
             onNotice: { [weak surfaceView] notice in
@@ -185,11 +224,13 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             positionWindow()
         }
         window?.orderFrontRegardless()
+        idleOpacityController.start()
         capture.start()
     }
 
     func stop() {
         isRunning = false
+        idleOpacityController.stop()
         capture.stop()
         let center = NSWorkspace.shared.notificationCenter
         workspaceObservers.forEach(center.removeObserver)

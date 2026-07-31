@@ -22,6 +22,9 @@ func toubarReplaceGeometrySmokeTest() {
     precondition(TouchBarCapture.minimumFramesPerSecond == 1)
     precondition(TouchBarCapture.defaultFramesPerSecond == 12)
     precondition(TouchBarCapture.maximumFramesPerSecond == 30)
+    precondition(TouchBarIdleOpacity.active == 1)
+    precondition(TouchBarIdleOpacity.idle == 0.3)
+    precondition(TouchBarIdleOpacity.delay == .seconds(5))
     precondition(
         TouchBarSystemState.isControlStripExplicitlyEmpty(
             fullCustomized: [],

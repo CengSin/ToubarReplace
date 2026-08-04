@@ -413,6 +413,30 @@ enum AgentLaunchCommand {
     static let cursorLeadingArguments = ["--new-window"]
 }
 
+enum AgentProcess {
+    static func make(
+        executableURL: URL,
+        arguments: [String],
+        workingDirectory: URL,
+        inheritedEnvironment: [String: String] =
+            ProcessInfo.processInfo.environment
+    ) -> Process {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.currentDirectoryURL = workingDirectory.standardizedFileURL
+
+        var environment = inheritedEnvironment
+        let executableDirectory = executableURL
+            .deletingLastPathComponent().path
+        let inheritedPath = environment["PATH"]
+            ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["PATH"] = "\(executableDirectory):\(inheritedPath)"
+        process.environment = environment
+        return process
+    }
+}
+
 enum TerminalAdapterID: String, CaseIterable {
     case otty
     case terminal
@@ -783,6 +807,7 @@ final class AgentLauncher {
             try await runProcess(
                 executableURL: executableURL,
                 arguments: leadingArguments + [projectDirectory.path],
+                workingDirectory: projectDirectory,
                 agentName: agent.displayName
             )
 
@@ -813,6 +838,7 @@ final class AgentLauncher {
                     toolURL: toolURL,
                     projectDirectory: projectDirectory
                 ),
+                workingDirectory: projectDirectory,
                 agentName: agentName
             )
         case .terminalAppleScript:
@@ -822,6 +848,7 @@ final class AgentLauncher {
                     toolURL: toolURL,
                     projectDirectory: projectDirectory
                 ),
+                workingDirectory: projectDirectory,
                 agentName: agentName
             )
         }
@@ -830,16 +857,14 @@ final class AgentLauncher {
     private func runProcess(
         executableURL: URL,
         arguments: [String],
+        workingDirectory: URL,
         agentName: String
     ) async throws {
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = arguments
-        var environment = ProcessInfo.processInfo.environment
-        let executableDirectory = executableURL.deletingLastPathComponent().path
-        let inheritedPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PATH"] = "\(executableDirectory):\(inheritedPath)"
-        process.environment = environment
+        let process = AgentProcess.make(
+            executableURL: executableURL,
+            arguments: arguments,
+            workingDirectory: workingDirectory
+        )
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
 

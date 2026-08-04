@@ -174,6 +174,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
+        panel.ignoresMouseEvents = false
         panel.minSize = TouchBarWindowMetrics.minimumSize
         panel.animationBehavior = .none
         panel.titleVisibility = .hidden

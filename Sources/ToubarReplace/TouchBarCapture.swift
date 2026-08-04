@@ -6,7 +6,11 @@ import OSLog
 import TouchBarPrivateAPI
 
 enum ToubarReplaceAppInfo {
-    static let version = "1.0.0"
+    static var version: String {
+        Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "开发版"
+    }
     static let recoveryCommands = """
     defaults delete com.apple.controlstrip FullCustomized
     defaults delete com.apple.controlstrip MiniCustomized
@@ -21,6 +25,7 @@ enum TouchBarCaptureError: LocalizedError, Equatable {
     case controlStripEmpty
     case blackFrame
     case streamStopped
+    case streamStartupTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -36,6 +41,8 @@ enum TouchBarCaptureError: LocalizedError, Equatable {
             return "TouchBarServer 只返回黑画面；请重启 ControlStrip 和 TouchBarServer"
         case .streamStopped:
             return "Touch Bar 显示流已中断，正在自动重连…"
+        case .streamStartupTimedOut:
+            return "Touch Bar 显示流启动后没有返回画面，正在自动重连…"
         }
     }
 }
@@ -104,7 +111,10 @@ final class TouchBarCapture: @unchecked Sendable {
 
     static let minimumFramesPerSecond = 1
     static let maximumFramesPerSecond = 30
-    static let defaultFramesPerSecond = 12
+    static let defaultFramesPerSecond = 30
+    private static let minimumBlankFrameCount = 2
+    private static let minimumBlankFrameDuration: UInt64 = 500_000_000
+    private static let streamStartupTimeout: DispatchTimeInterval = .seconds(5)
     private static let logger = Logger(
         subsystem: "com.toubarreplace.app",
         category: "TouchBarDisplayStream"
@@ -122,6 +132,9 @@ final class TouchBarCapture: @unchecked Sendable {
     private let onError: ErrorHandler
     private var frameIntervalNanoseconds: UInt64
     private var lastDeliveredAt: UInt64 = 0
+    private var pendingFrame: CGImage?
+    private var pendingFrameDeliveryScheduled = false
+    private var pendingFrameDeliveryToken: UInt64 = 0
     private var stream: CGDisplayStream?
     private var stopped = true
     private var generation: UInt64 = 0
@@ -129,6 +142,8 @@ final class TouchBarCapture: @unchecked Sendable {
     private var lastError: TouchBarCaptureError?
     private var lastNotice: TouchBarCaptureNotice?
     private var consecutiveBlackFrames = 0
+    private var firstBlankFrameAt: UInt64?
+    private var hasReceivedStreamActivity = false
     private var hasLoggedFirstFrame = false
 
     init(
@@ -232,6 +247,7 @@ final class TouchBarCapture: @unchecked Sendable {
             scheduleRetry(generation: generation)
             return
         }
+        scheduleStartupHealthCheck(generation: generation)
         debugTrace("display stream started")
     }
 
@@ -244,12 +260,11 @@ final class TouchBarCapture: @unchecked Sendable {
 
         switch status {
         case .frameComplete:
+            hasReceivedStreamActivity = true
             guard let surface else {
                 report(.invalidSurface)
                 return
             }
-            let deliveredAt = DispatchTime.now().uptimeNanoseconds
-            guard shouldDeliver(at: deliveredAt) else { return }
             guard !isNearlyBlack(surface) else {
                 handleBlankFrame()
                 return
@@ -260,29 +275,25 @@ final class TouchBarCapture: @unchecked Sendable {
             }
 
             consecutiveBlackFrames = 0
-            lastError = nil
-            lastNotice = nil
-            lastDeliveredAt = deliveredAt
-            onFrame(image)
-            if !hasLoggedFirstFrame {
-                hasLoggedFirstFrame = true
-                Self.logger.info(
-                    "Received Touch Bar frame: \(image.width)x\(image.height)"
-                )
-                debugTrace(
-                    "received Touch Bar frame \(image.width)x\(image.height)"
-                )
-            }
+            firstBlankFrameAt = nil
+            submitFrame(
+                image,
+                at: DispatchTime.now().uptimeNanoseconds,
+                generation: generation
+            )
 
         case .frameBlank:
+            hasReceivedStreamActivity = true
             handleBlankFrame()
 
         case .stopped:
             stream = nil
+            resetFrameDeliveryState()
             report(.streamStopped)
             scheduleRetry(generation: generation)
 
         case .frameIdle:
+            hasReceivedStreamActivity = true
             break
 
         @unknown default:
@@ -291,8 +302,19 @@ final class TouchBarCapture: @unchecked Sendable {
     }
 
     private func handleBlankFrame() {
+        pendingFrame = nil
+        let timestamp = DispatchTime.now().uptimeNanoseconds
         consecutiveBlackFrames += 1
-        guard consecutiveBlackFrames >= 2 else { return }
+        if firstBlankFrameAt == nil {
+            firstBlankFrameAt = timestamp
+        }
+        guard
+            consecutiveBlackFrames >= Self.minimumBlankFrameCount,
+            let firstBlankFrameAt,
+            timestamp - firstBlankFrameAt >= Self.minimumBlankFrameDuration
+        else {
+            return
+        }
 
         if TouchBarSystemState.allowsEmptyContent(
             presentationMode: TouchBarSystemState.presentationMode
@@ -313,6 +335,65 @@ final class TouchBarCapture: @unchecked Sendable {
             return true
         }
         return timestamp - lastDeliveredAt >= frameIntervalNanoseconds
+    }
+
+    private func submitFrame(
+        _ image: CGImage,
+        at timestamp: UInt64,
+        generation: UInt64
+    ) {
+        guard !shouldDeliver(at: timestamp) else {
+            pendingFrame = nil
+            deliverFrame(image, at: timestamp)
+            return
+        }
+
+        // CGDisplayStream may send a short burst of transition frames and then
+        // stay idle. Keep replacing the pending image so the final stable frame
+        // is delivered instead of being discarded by the FPS limiter.
+        pendingFrame = image
+        guard !pendingFrameDeliveryScheduled else { return }
+        pendingFrameDeliveryScheduled = true
+        pendingFrameDeliveryToken &+= 1
+        let deliveryToken = pendingFrameDeliveryToken
+
+        let elapsed = timestamp - lastDeliveredAt
+        let remaining = frameIntervalNanoseconds - elapsed
+        workerQueue.asyncAfter(
+            deadline: .now() + .nanoseconds(Int(remaining))
+        ) { [weak self] in
+            guard
+                let self,
+                !self.stopped,
+                generation == self.generation,
+                deliveryToken == self.pendingFrameDeliveryToken
+            else {
+                return
+            }
+            self.pendingFrameDeliveryScheduled = false
+            guard let pendingFrame = self.pendingFrame else { return }
+            self.pendingFrame = nil
+            self.deliverFrame(
+                pendingFrame,
+                at: DispatchTime.now().uptimeNanoseconds
+            )
+        }
+    }
+
+    private func deliverFrame(_ image: CGImage, at timestamp: UInt64) {
+        lastError = nil
+        lastNotice = nil
+        lastDeliveredAt = timestamp
+        onFrame(image)
+        if !hasLoggedFirstFrame {
+            hasLoggedFirstFrame = true
+            Self.logger.info(
+                "Received Touch Bar frame: \(image.width)x\(image.height)"
+            )
+            debugTrace(
+                "received Touch Bar frame \(image.width)x\(image.height)"
+            )
+        }
     }
 
     private func makeImage(from surface: IOSurfaceRef) -> CGImage? {
@@ -372,8 +453,7 @@ final class TouchBarCapture: @unchecked Sendable {
             _ = TBRStopDisplayStream(stream)
             self.stream = nil
         }
-        lastDeliveredAt = 0
-        consecutiveBlackFrames = 0
+        resetFrameDeliveryState()
 
         if restoreTouchBarStatus, let initialTouchBarStatus {
             TBRSetTouchBarStatus(initialTouchBarStatus)
@@ -381,10 +461,39 @@ final class TouchBarCapture: @unchecked Sendable {
         }
     }
 
+    private func resetFrameDeliveryState() {
+        lastDeliveredAt = 0
+        pendingFrame = nil
+        pendingFrameDeliveryScheduled = false
+        pendingFrameDeliveryToken &+= 1
+        consecutiveBlackFrames = 0
+        firstBlankFrameAt = nil
+        hasReceivedStreamActivity = false
+    }
+
     private func scheduleRetry(generation: UInt64) {
         guard !stopped, generation == self.generation else { return }
         workerQueue.asyncAfter(deadline: .now() + 1) { [weak self] in
             self?.startStream(generation: generation)
+        }
+    }
+
+    private func scheduleStartupHealthCheck(generation: UInt64) {
+        workerQueue.asyncAfter(
+            deadline: .now() + Self.streamStartupTimeout
+        ) { [weak self] in
+            guard
+                let self,
+                !self.stopped,
+                generation == self.generation,
+                self.stream != nil,
+                !self.hasReceivedStreamActivity
+            else {
+                return
+            }
+            self.stopStream(restoreTouchBarStatus: false)
+            self.report(.streamStartupTimedOut)
+            self.scheduleRetry(generation: generation)
         }
     }
 

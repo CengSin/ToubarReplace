@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 @MainActor
 final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
@@ -149,6 +150,18 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 struct ToubarReplaceMain {
     static func main() {
+        if CommandLine.arguments.contains("--smoke-test") {
+            let failures = ToubarReplaceSmokeTest.failures()
+            guard failures.isEmpty else {
+                let message = "ToubarReplace smoke test failed:\n"
+                    + failures.map { "- \($0)" }.joined(separator: "\n")
+                    + "\n"
+                FileHandle.standardError.write(Data(message.utf8))
+                exit(EXIT_FAILURE)
+            }
+            print("ToubarReplace smoke test passed")
+            return
+        }
         let application = NSApplication.shared
         let delegate = ToubarReplaceAppDelegate()
         application.delegate = delegate

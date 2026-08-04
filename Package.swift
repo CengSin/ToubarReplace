@@ -23,10 +23,6 @@ let package = Package(
             name: "ToubarReplace",
             dependencies: ["TouchBarPrivateAPI"]
         ),
-        .testTarget(
-            name: "ToubarReplaceTests",
-            dependencies: ["ToubarReplace"]
-        ),
     ],
     swiftLanguageModes: [.v6]
 )

@@ -170,7 +170,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         framesPerSecondField.integerValue = currentFramesPerSecond
 
         let hintLabel = NSTextField(
-            labelWithString: "画面来自一个持续运行的 Touch Bar 显示流，不再重复启动截图进程。默认 12 FPS；窗口像素会自动保存。"
+            labelWithString: "画面来自一个持续运行的 Touch Bar 显示流，不再重复启动截图进程。默认 30 FPS；窗口像素会自动保存。"
         )
         hintLabel.textColor = .secondaryLabelColor
         hintLabel.maximumNumberOfLines = 2

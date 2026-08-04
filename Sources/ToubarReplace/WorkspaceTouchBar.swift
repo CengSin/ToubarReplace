@@ -60,22 +60,22 @@ enum WorkspaceTouchBarStyle {
         blue: 44 / 255,
         alpha: 1
     )
-    static let dividerColor = NSColor.white.withAlphaComponent(0.16)
-    static let primaryTextColor = NSColor.white.withAlphaComponent(0.96)
-    static let secondaryTextColor = NSColor.white.withAlphaComponent(0.54)
+    static let dividerColor = NSColor.white.withAlphaComponent(0.24)
+    static let primaryTextColor = NSColor.white
+    static let secondaryTextColor = NSColor.white.withAlphaComponent(0.72)
     static let controlHeight: CGFloat = 30
     static let cornerRadius: CGFloat = 6.25
     static let itemSpacing: CGFloat = 6
     static let horizontalPadding: CGFloat = 12
     static let imageTitleSpacing: CGFloat = 7
-    static let iconWidth: CGFloat = 14
-    static let agentItemWidth: CGFloat = 42
-    static let agentIconSize: CGFloat = 24
-    static let agentEdgeFadeWidth: CGFloat = 18
+    static let iconWidth: CGFloat = 16
+    static let agentItemWidth: CGFloat = 44
+    static let agentIconSize: CGFloat = 26
+    static let agentEdgeFadeWidth: CGFloat = 8
     @MainActor
     static var titleFont: NSFont {
         NSFont.systemFont(
-            ofSize: 11,
+            ofSize: 12,
             weight: .semibold
         )
     }
@@ -131,11 +131,32 @@ enum WorkspaceTouchBarStyle {
 
     @MainActor
     static func agentIcon(for agent: AvailableAgent) -> NSImage? {
-        guard let applicationURL = agent.iconApplicationURL else {
-            return agentSymbol(for: agent.id)
+        let sourceImage: NSImage?
+        if let applicationURL = agent.iconApplicationURL {
+            sourceImage = NSWorkspace.shared.icon(forFile: applicationURL.path)
+            sourceImage?.isTemplate = false
+        } else {
+            sourceImage = agentSymbol(for: agent.id)
         }
-        let icon = NSWorkspace.shared.icon(forFile: applicationURL.path)
-        icon.isTemplate = false
+        guard let sourceImage else { return nil }
+
+        let targetSize = NSSize(
+            width: agentIconSize,
+            height: agentIconSize
+        )
+        let icon = NSImage(size: targetSize, flipped: false) { rect in
+            NSGraphicsContext.current?.imageInterpolation = .high
+            sourceImage.draw(
+                in: rect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+            return true
+        }
+        icon.isTemplate = sourceImage.isTemplate
         return icon
     }
 }
@@ -218,8 +239,11 @@ final class WorkspaceTouchBarPathView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = WorkspaceTouchBarStyle.itemBackground.cgColor
+        layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
         imageView.imageScaling = .scaleProportionallyDown
-        imageView.contentTintColor = WorkspaceTouchBarStyle.secondaryTextColor
+        imageView.contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
         imageView.wantsLayer = true
         addSubview(imageView)
         titleLabel.font = WorkspaceTouchBarStyle.titleFont
@@ -248,6 +272,11 @@ final class WorkspaceTouchBarPathView: NSView {
 
     override func layout() {
         super.layout()
+        let contentsScale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        layer?.contentsScale = contentsScale
+        imageView.layer?.contentsScale = contentsScale
         actionButton.frame = bounds
         let iconSize = WorkspaceTouchBarStyle.iconWidth
         let iconX = WorkspaceTouchBarStyle.horizontalPadding
@@ -471,6 +500,11 @@ final class WorkspaceTouchBarAgentItemView: NSScrubberItemView {
 
     override func layout() {
         super.layout()
+        let contentsScale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        layer?.contentsScale = contentsScale
+        imageView.layer?.contentsScale = contentsScale
         let iconSize = WorkspaceTouchBarStyle.agentIconSize
         imageView.frame = NSRect(
             x: floor(bounds.midX - iconSize / 2),
@@ -504,14 +538,12 @@ final class WorkspaceTouchBarAgentItemView: NSScrubberItemView {
         layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
         let emphasized = isSelected || isHighlighted
         layer?.backgroundColor = emphasized
-            ? NSColor.white.withAlphaComponent(0.16).cgColor
-            : NSColor.clear.cgColor
-        imageView.alphaValue = emphasized ? 1 : 0.72
-        imageView.layer?.setAffineTransform(
-            emphasized
-                ? CGAffineTransform(scaleX: 1.08, y: 1.08)
-                : .identity
-        )
+            ? NSColor.white.withAlphaComponent(0.22).cgColor
+            : NSColor.white.withAlphaComponent(0.06).cgColor
+        layer?.borderWidth = emphasized ? 1 : 0
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
+        imageView.alphaValue = emphasized ? 1 : 0.94
+        imageView.layer?.setAffineTransform(.identity)
     }
 }
 

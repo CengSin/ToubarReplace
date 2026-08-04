@@ -238,6 +238,11 @@ final class WorkspaceAgentIconView: NSView {
 
     override func layout() {
         super.layout()
+        let contentsScale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        layer?.contentsScale = contentsScale
+        imageView.layer?.contentsScale = contentsScale
         let iconSize = WorkspaceTouchBarStyle.agentIconSize
         imageView.frame = NSRect(
             x: floor(bounds.midX - iconSize / 2),
@@ -249,9 +254,9 @@ final class WorkspaceAgentIconView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard isInteractionEnabled, let agent else { return }
-        imageView.alphaValue = 0.45
+        imageView.alphaValue = 0.62
         super.mouseDown(with: event)
-        imageView.alphaValue = 0.82
+        imageView.alphaValue = 0.96
         onActivate?(agent)
     }
 
@@ -274,7 +279,7 @@ final class WorkspaceAgentIconView: NSView {
 
     func setEnabled(_ enabled: Bool) {
         isInteractionEnabled = enabled
-        imageView.alphaValue = enabled ? 0.82 : 0.34
+        imageView.alphaValue = enabled ? 0.96 : 0.45
     }
 }
 

@@ -126,9 +126,9 @@ enum ToubarReplaceSmokeTest {
             WorkspaceTouchBarLayout.preferredContentWidth == 680
                 && WorkspaceTouchBarStyle.controlHeight == 30
                 && WorkspaceTouchBarStyle.cornerRadius == 6.25
-                && WorkspaceTouchBarStyle.agentItemWidth == 42
-                && WorkspaceTouchBarStyle.agentIconSize == 24
-                && WorkspaceTouchBarStyle.agentEdgeFadeWidth == 18
+                && WorkspaceTouchBarStyle.agentItemWidth == 44
+                && WorkspaceTouchBarStyle.agentIconSize == 26
+                && WorkspaceTouchBarStyle.agentEdgeFadeWidth == 8
                 && WorkspaceTouchBarLayout.contentGap == 12,
             "Workspace icon row must keep the large-icon geometry",
             failures: &failures

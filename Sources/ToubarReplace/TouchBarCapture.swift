@@ -61,6 +61,38 @@ enum TouchBarCaptureNotice: Equatable {
     }
 }
 
+enum TouchBarPresentationPreferences {
+    private static let applicationIdentifier =
+        "com.apple.touchbar.agent"
+    private static let presentationModeKey =
+        "PresentationModeGlobal"
+
+    static var currentMode: String? {
+        CFPreferencesAppSynchronize(applicationIdentifier as CFString)
+        return CFPreferencesCopyAppValue(
+            presentationModeKey as CFString,
+            applicationIdentifier as CFString
+        ) as? String
+    }
+
+    static func setCurrentMode(_ mode: String?) {
+        if let mode {
+            CFPreferencesSetAppValue(
+                presentationModeKey as CFString,
+                mode as CFString,
+                applicationIdentifier as CFString
+            )
+        } else {
+            CFPreferencesSetAppValue(
+                presentationModeKey as CFString,
+                nil,
+                applicationIdentifier as CFString
+            )
+        }
+        CFPreferencesAppSynchronize(applicationIdentifier as CFString)
+    }
+}
+
 enum TouchBarSystemState {
     private static let contextualPresentationModes: Set<String> = [
         "app",
@@ -95,8 +127,7 @@ enum TouchBarSystemState {
     }
 
     static var presentationMode: String? {
-        UserDefaults(suiteName: "com.apple.touchbar.agent")?
-            .string(forKey: "PresentationModeGlobal")
+        TouchBarPresentationPreferences.currentMode
     }
 }
 

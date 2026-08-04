@@ -69,8 +69,9 @@ enum WorkspaceTouchBarStyle {
     static let horizontalPadding: CGFloat = 12
     static let imageTitleSpacing: CGFloat = 7
     static let iconWidth: CGFloat = 14
-    static let agentItemWidth: CGFloat = 32
-    static let agentIconSize: CGFloat = 18
+    static let agentItemWidth: CGFloat = 42
+    static let agentIconSize: CGFloat = 24
+    static let agentEdgeFadeWidth: CGFloat = 18
     @MainActor
     static var titleFont: NSFont {
         NSFont.systemFont(
@@ -126,6 +127,16 @@ enum WorkspaceTouchBarStyle {
             named: "circle.fill",
             accessibilityDescription: id.rawValue
         )
+    }
+
+    @MainActor
+    static func agentIcon(for agent: AvailableAgent) -> NSImage? {
+        guard let applicationURL = agent.iconApplicationURL else {
+            return agentSymbol(for: agent.id)
+        }
+        let icon = NSWorkspace.shared.icon(forFile: applicationURL.path)
+        icon.isTemplate = false
+        return icon
     }
 }
 
@@ -201,6 +212,7 @@ final class WorkspaceTouchBarContentView: NSView {
 final class WorkspaceTouchBarPathView: NSView {
     private let imageView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private let actionButton = NSButton()
     private var isInteractionEnabled = true
     var onActivate: (() -> Void)?
 
@@ -215,6 +227,14 @@ final class WorkspaceTouchBarPathView: NSView {
         titleLabel.alignment = .left
         titleLabel.lineBreakMode = .byTruncatingMiddle
         addSubview(titleLabel)
+
+        actionButton.title = ""
+        actionButton.isBordered = false
+        actionButton.setButtonType(.momentaryChange)
+        actionButton.target = self
+        actionButton.action = #selector(activatePath)
+        actionButton.toolTip = nil
+        addSubview(actionButton)
     }
 
     @available(*, unavailable)
@@ -228,6 +248,7 @@ final class WorkspaceTouchBarPathView: NSView {
 
     override func layout() {
         super.layout()
+        actionButton.frame = bounds
         let iconSize = WorkspaceTouchBarStyle.iconWidth
         let iconX = WorkspaceTouchBarStyle.horizontalPadding
         imageView.frame = NSRect(
@@ -252,18 +273,16 @@ final class WorkspaceTouchBarPathView: NSView {
         )
     }
 
-    override func mouseDown(with event: NSEvent) {
-        guard isInteractionEnabled else { return }
-        alphaValue = 0.58
-        super.mouseDown(with: event)
-        alphaValue = 1
-        onActivate?()
-    }
-
     override func accessibilityPerformPress() -> Bool {
         guard isInteractionEnabled else { return false }
         onActivate?()
         return true
+    }
+
+    @objc
+    private func activatePath() {
+        guard isInteractionEnabled else { return }
+        onActivate?()
     }
 
     func display(
@@ -276,12 +295,55 @@ final class WorkspaceTouchBarPathView: NSView {
         titleLabel.stringValue = title
         self.toolTip = toolTip
         isInteractionEnabled = enabled
+        actionButton.isEnabled = enabled
+        actionButton.toolTip = toolTip
         alphaValue = enabled ? 1 : 0.42
         imageView.isHidden = image == nil
         needsLayout = true
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityLabel(title)
+        actionButton.setAccessibilityLabel(title)
+    }
+}
+
+@MainActor
+final class WorkspaceAgentScrubber: NSScrubber {
+    private let edgeMask = CAGradientLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        edgeMask.colors = [
+            NSColor.clear.cgColor,
+            NSColor.black.cgColor,
+            NSColor.black.cgColor,
+            NSColor.clear.cgColor,
+        ]
+        edgeMask.startPoint = CGPoint(x: 0, y: 0.5)
+        edgeMask.endPoint = CGPoint(x: 1, y: 0.5)
+        layer?.mask = edgeMask
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        edgeMask.frame = bounds
+        let fadeFraction = min(
+            WorkspaceTouchBarStyle.agentEdgeFadeWidth
+                / max(bounds.width, 1),
+            0.28
+        )
+        edgeMask.locations = [
+            0,
+            NSNumber(value: fadeFraction),
+            NSNumber(value: 1 - fadeFraction),
+            1,
+        ]
     }
 }
 
@@ -427,16 +489,23 @@ final class WorkspaceTouchBarAgentItemView: NSScrubberItemView {
     }
 
     func display(_ agent: AvailableAgent) {
-        imageView.image = WorkspaceTouchBarStyle.agentSymbol(for: agent.id)
-        toolTip = "用 \(agent.displayName) 打开当前项目"
+        let icon = WorkspaceTouchBarStyle.agentIcon(for: agent)
+        imageView.image = icon
+        imageView.contentTintColor = icon?.isTemplate == true
+            ? WorkspaceTouchBarStyle.primaryTextColor
+            : nil
+        toolTip = "左右滑动选择；点按 \(agent.displayName) 启动"
         setAccessibilityLabel(agent.displayName)
         updateAppearance()
     }
 
     private func updateAppearance() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
         let emphasized = isSelected || isHighlighted
+        layer?.backgroundColor = emphasized
+            ? NSColor.white.withAlphaComponent(0.16).cgColor
+            : NSColor.clear.cgColor
         imageView.alphaValue = emphasized ? 1 : 0.72
         imageView.layer?.setAffineTransform(
             emphasized
@@ -463,7 +532,7 @@ final class WorkspaceTouchBarController: NSObject,
 
     private let touchBar = NSTouchBar()
     private let pathView = WorkspaceTouchBarPathView()
-    private let scrubber = NSScrubber()
+    private let scrubber = WorkspaceAgentScrubber()
     private lazy var contentView = WorkspaceTouchBarContentView(
         pathView: pathView,
         agentsView: scrubber
@@ -473,6 +542,7 @@ final class WorkspaceTouchBarController: NSObject,
     private var previousPresentationMode: String?
     private var hadPreviousPresentationMode = false
     private var agentsEnabled = false
+    private var selectedAgentIndex: Int?
     private var hasAttachedToTouchBarWindow = false
     private var isExplicitlyDismissing = false
     private var detachmentTask: Task<Void, Never>?
@@ -507,11 +577,12 @@ final class WorkspaceTouchBarController: NSObject,
         layout.itemSpacing = WorkspaceTouchBarStyle.itemSpacing
         scrubber.scrubberLayout = layout
         scrubber.mode = .free
-        scrubber.isContinuous = false
-        scrubber.itemAlignment = .none
+        scrubber.isContinuous = true
+        scrubber.itemAlignment = .center
         scrubber.showsArrowButtons = false
-        scrubber.showsAdditionalContentIndicators = true
-        scrubber.selectionBackgroundStyle = nil
+        scrubber.showsAdditionalContentIndicators = false
+        scrubber.selectionBackgroundStyle = .roundedBackground
+        scrubber.floatsSelectionViews = true
         scrubber.backgroundColor = .clear
         scrubber.dataSource = self
         scrubber.delegate = self
@@ -728,7 +799,11 @@ final class WorkspaceTouchBarController: NSObject,
 
     func scrubber(_ scrubber: NSScrubber, didSelectItemAt index: Int) {
         guard agentsEnabled, agents.indices.contains(index) else { return }
-        onAgentActivated?(agents[index])
+        if selectedAgentIndex == index {
+            onAgentActivated?(agents[index])
+        } else {
+            selectedAgentIndex = index
+        }
     }
 
     private func reloadAgents(enabled: Bool, placeholder: String? = nil) {
@@ -737,8 +812,18 @@ final class WorkspaceTouchBarController: NSObject,
         scrubber.alphaValue = agentsEnabled ? 1 : 0.45
         contentView.showAgentsPlaceholder(placeholder)
         if !agents.isEmpty {
-            scrubber.selectedIndex = -1
+            let selectedIndex = selectedAgentIndex.flatMap { index in
+                agents.indices.contains(index) ? index : nil
+            } ?? 0
+            selectedAgentIndex = selectedIndex
+            scrubber.selectedIndex = selectedIndex
             scrubber.scrubberLayout.invalidateLayout()
+            scrubber.scrollItem(
+                at: selectedIndex,
+                to: .center
+            )
+        } else {
+            selectedAgentIndex = nil
         }
     }
 

@@ -4,7 +4,7 @@
 适用范围：ToubarReplace 桌面 Touch Bar 镜像与物理 Touch Bar Workspace  
 目标版本：Workspace Bar 物理交互迭代
 
-当前实现已包含独立浮动/镜像附着两种切换入口、system-modal 物理 `NSTouchBar`、Finder 当前目录自动同步、最近项目恢复、手动目录选择、已授权情况下的前台文档路径解析、Codex/Cursor/Claude Code/Grok Build 发现与启动、70/30 目录与 Agent 图标行、Otty/Terminal 适配、入口左右位置和启动后自动收起设置。`toubar use .`、更多 IDE/终端 resolver、Agent 隐藏与排序界面仍属于后续迭代。
+当前实现已包含独立浮动/镜像附着两种切换入口、system-modal 物理 `NSTouchBar`、Finder 当前目录自动同步、最近项目恢复、手动目录选择、已授权情况下的前台文档路径解析、Codex/Cursor/Claude Code/Grok Build 发现与启动、70/30 目录与大图标 Agent 滑动行、Otty/Terminal 适配、入口左右位置和启动后自动收起设置。`toubar use .`、更多 IDE/终端 resolver、Agent 隐藏与排序界面仍属于后续迭代。
 
 ## 1. 产品定位
 
@@ -89,15 +89,15 @@ Touch Bar 中只展示来源、项目名和必要的相对路径。完整路径�
 
 ### 3.3 选择并启动 Agent
 
-1. 路径可用后，在右侧 30% 图标行显示已发现且可启动的 Agent。
+1. 路径可用后，在右侧 30% 图标行显示已发现且可启动的 Agent；优先读取对应 App Bundle 的真实图标，CLI-only Agent 使用系统图标回退。
 2. 用户在 Agent 区域左右滑动切换选中项。
-3. Agent 区域不显示左右箭头；内容溢出时仅在左右边缘显示系统原生渐隐提示。
+3. Agent 区域不显示左右箭头，左右边缘始终保留横向渐隐，以提示可以继续滑动。
 4. 滑动只改变选择，不立即启动，避免误操作。
-5. 点击 Agent 名称方框后，在当前路径中启动它。
+5. 点击已选中的 Agent 图标后，在当前路径中启动它；点击其他图标时先切换选择，再次点击才启动。
 6. 启动成功后，默认延迟约 `500ms` 返回系统镜像。
 7. 启动失败时保持 Workspace 展开，并在对应 Agent 附近展示简短错误。
 
-如果全部 Agent 名称方框都能完整显示，用户也可以直接点击任意名称，无需先滑动到中心。
+如果全部 Agent 图标都能完整显示，用户可以直接点选目标图标，再次点击启动。
 
 ## 4. Workspace 状态模型
 
@@ -211,7 +211,7 @@ struct AgentDescriptor {
 
 不能只扫描 `/Applications`。GUI App 可能安装在用户目录、处于运行状态或由 CLI 负责唤起。
 
-Agent 行只展示名称方框，不读取或展示 App Bundle 图标。发现逻辑只负责判断 Agent 是否可启动并生成对应启动策略。
+Agent 行优先读取已发现 App Bundle 的真实图标；没有关联 GUI App 的 CLI Agent 使用系统符号回退。图标来源与启动策略保持独立，例如 Codex 可以使用 App 图标，同时仍通过 CLI 打开项目。
 
 ### 6.2 第一批 Agent
 
@@ -407,7 +407,7 @@ Workspace 使用与 Pock 同类的私有 system-modal 接口，把自建 `NSTouc
 
 ### Phase 3：Agent 启动器
 
-- 实现 Agent registry、发现规则和名称方框。
+- 实现 Agent registry、发现规则和应用图标滑动行。
 - 接入 Codex、Cursor、Claude Code。
 - 实现横向滑动选择和点击启动。
 - 实现启动成功自动返回镜像。

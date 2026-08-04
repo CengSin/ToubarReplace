@@ -509,6 +509,7 @@ enum AgentLaunchStrategy {
 struct AvailableAgent {
     let id: AgentID
     let displayName: String
+    let iconApplicationURL: URL?
     let launchStrategy: AgentLaunchStrategy
 }
 
@@ -555,6 +556,7 @@ final class AgentRegistry {
         return AvailableAgent(
             id: .codex,
             displayName: "Codex",
+            iconApplicationURL: applicationURL,
             launchStrategy: strategy
         )
     }
@@ -589,6 +591,7 @@ final class AgentRegistry {
         return AvailableAgent(
             id: .cursor,
             displayName: "Cursor",
+            iconApplicationURL: applicationURL,
             launchStrategy: strategy
         )
     }
@@ -597,9 +600,14 @@ final class AgentRegistry {
         guard let executableURL = findExecutable(named: "claude") else {
             return nil
         }
+        let applicationURL = findApplication(
+            names: ["Claude"],
+            bundleIdentifiers: ["com.anthropic.claudefordesktop"]
+        )
         return AvailableAgent(
             id: .claudeCode,
             displayName: "Claude Code",
+            iconApplicationURL: applicationURL,
             launchStrategy: .terminal(executableURL: executableURL)
         )
     }
@@ -608,9 +616,14 @@ final class AgentRegistry {
         guard let executableURL = findExecutable(named: "grok") else {
             return nil
         }
+        let applicationURL = findApplication(
+            names: ["Grok"],
+            bundleIdentifiers: []
+        )
         return AvailableAgent(
             id: .grokBuild,
             displayName: "Grok Build",
+            iconApplicationURL: applicationURL,
             launchStrategy: .terminal(executableURL: executableURL)
         )
     }

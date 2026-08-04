@@ -263,7 +263,11 @@ final class WorkspaceAgentIconView: NSView {
 
     func display(_ agent: AvailableAgent) {
         self.agent = agent
-        imageView.image = WorkspaceTouchBarStyle.agentSymbol(for: agent.id)
+        let icon = WorkspaceTouchBarStyle.agentIcon(for: agent)
+        imageView.image = icon
+        imageView.contentTintColor = icon?.isTemplate == true
+            ? WorkspaceTouchBarStyle.primaryTextColor
+            : nil
         toolTip = "用 \(agent.displayName) 打开当前项目"
         setAccessibilityLabel(agent.displayName)
     }
@@ -287,6 +291,16 @@ final class AgentIconRowView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
         layer?.masksToBounds = true
+        let edgeMask = CAGradientLayer()
+        edgeMask.colors = [
+            NSColor.clear.cgColor,
+            NSColor.black.cgColor,
+            NSColor.black.cgColor,
+            NSColor.clear.cgColor,
+        ]
+        edgeMask.startPoint = CGPoint(x: 0, y: 0.5)
+        edgeMask.endPoint = CGPoint(x: 1, y: 0.5)
+        layer?.mask = edgeMask
 
         stackView.orientation = .horizontal
         stackView.alignment = .centerY
@@ -311,6 +325,20 @@ final class AgentIconRowView: NSView {
 
     override func layout() {
         super.layout()
+        if let edgeMask = layer?.mask as? CAGradientLayer {
+            edgeMask.frame = bounds
+            let fadeFraction = min(
+                WorkspaceTouchBarStyle.agentEdgeFadeWidth
+                    / max(bounds.width, 1),
+                0.28
+            )
+            edgeMask.locations = [
+                0,
+                NSNumber(value: fadeFraction),
+                NSNumber(value: 1 - fadeFraction),
+                1,
+            ]
+        }
         let contentSize = stackView.fittingSize
         stackView.frame = NSRect(
             x: floor(bounds.midX - contentSize.width / 2),

@@ -1,7 +1,9 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
 enum ToubarReplaceSmokeTest {
+    @MainActor
     static func failures() -> [String] {
         var failures: [String] = []
 
@@ -124,9 +126,32 @@ enum ToubarReplaceSmokeTest {
             WorkspaceTouchBarLayout.preferredContentWidth == 680
                 && WorkspaceTouchBarStyle.controlHeight == 30
                 && WorkspaceTouchBarStyle.cornerRadius == 6.25
-                && WorkspaceTouchBarStyle.agentItemWidth == 32
+                && WorkspaceTouchBarStyle.agentItemWidth == 42
+                && WorkspaceTouchBarStyle.agentIconSize == 24
+                && WorkspaceTouchBarStyle.agentEdgeFadeWidth == 18
                 && WorkspaceTouchBarLayout.contentGap == 12,
-            "Workspace icon row must keep the compact geometry",
+            "Workspace icon row must keep the large-icon geometry",
+            failures: &failures
+        )
+        let pathControl = WorkspaceTouchBarPathView(
+            frame: NSRect(x: 0, y: 0, width: 240, height: 30)
+        )
+        var pathControlActivated = false
+        pathControl.onActivate = {
+            pathControlActivated = true
+        }
+        pathControl.display(
+            image: nil,
+            title: "选择项目",
+            toolTip: nil,
+            enabled: true
+        )
+        pathControl.layoutSubtreeIfNeeded()
+        pathControl.subviews.compactMap { $0 as? NSButton }
+            .first?.performClick(nil)
+        expect(
+            pathControlActivated,
+            "Workspace path region must expose a real button action",
             failures: &failures
         )
         expect(

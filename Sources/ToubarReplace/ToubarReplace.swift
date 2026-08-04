@@ -13,6 +13,9 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
         controller.onPixelSizeChanged = { [weak self] pixelSize in
             self?.settingsWindowController?.updatePixelSize(pixelSize)
         }
+        controller.onRequestWorkspaceDirectory = { [weak self] completion in
+            self?.chooseWorkspaceDirectory(completion: completion)
+        }
         windowController = controller
         installStatusItem()
         controller.start()
@@ -85,8 +88,37 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                     ?? TouchBarPreferences.mirrorPixelSize,
                 currentFramesPerSecond: windowController?.displayFramesPerSecond
                     ?? TouchBarPreferences.displayFramesPerSecond,
+                currentWorkspaceSide: windowController?.workspaceSwitcherSide
+                    ?? WorkspacePreferences.switcherSide,
+                currentWorkspaceSwitcherFloats:
+                    windowController?.workspaceSwitcherFloats
+                    ?? WorkspacePreferences.floatingSwitcher,
+                currentWorkspaceAutoCollapse:
+                    windowController?.workspaceAutoCollapse
+                    ?? WorkspacePreferences.autoCollapse,
+                terminalAdapters:
+                    windowController?.availableTerminalAdapters ?? [],
+                currentTerminalAdapterID:
+                    windowController?.workspaceTerminalAdapterID
+                    ?? WorkspacePreferences.terminalAdapterID,
                 onPositionChanged: { [weak self] position in
                     self?.windowController?.setDisplayPosition(position)
+                },
+                onWorkspaceSideChanged: { [weak self] side in
+                    self?.windowController?.setWorkspaceSwitcherSide(side)
+                },
+                onWorkspaceFloatingSwitcherChanged: { [weak self] floats in
+                    self?.windowController?.setWorkspaceSwitcherFloats(floats)
+                },
+                onWorkspaceAutoCollapseChanged: { [weak self] autoCollapse in
+                    self?.windowController?.setWorkspaceAutoCollapse(
+                        autoCollapse
+                    )
+                },
+                onTerminalAdapterChanged: { [weak self] adapterID in
+                    self?.windowController?.setWorkspaceTerminalAdapterID(
+                        adapterID
+                    )
                 },
                 onPixelSizeChanged: { [weak self] pixelSize in
                     self?.windowController?.setMirrorPixelSize(pixelSize)
@@ -137,6 +169,33 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
             window.orderOut(nil)
         } else {
             window.orderFrontRegardless()
+        }
+    }
+
+    private func chooseWorkspaceDirectory(
+        completion: @escaping (URL?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.title = "选择当前项目目录"
+        panel.prompt = "选择项目"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        if let lastPath = WorkspacePreferences.lastPath {
+            panel.directoryURL = lastPath
+        }
+
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            Task { @MainActor in
+                let directoryURL = response == .OK ? panel.url : nil
+                if self?.settingsWindowController?.window?.isVisible != true {
+                    NSApp.setActivationPolicy(.accessory)
+                }
+                completion(directoryURL)
+            }
         }
     }
 

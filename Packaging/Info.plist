@@ -29,5 +29,7 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>用于读取 Finder 当前目录，并通过用户选择的终端应用在项目目录中启动 Agent。</string>
 </dict>
 </plist>

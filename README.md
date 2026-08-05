@@ -35,8 +35,8 @@ Scripts/run-regression.sh
 
 路径可用后，Workspace 会显示本机能够实际启动的 Agent：
 
-- Codex：通过发现到的 `codex` 绝对路径执行 `codex app <项目路径>`，没有 CLI 时回退到 Codex App。
-- Cursor：优先执行 Cursor App 内置 CLI 的 `cursor --new-window <项目路径>`，保证指定目录被打开；没有内置 CLI 时查找 PATH 中的 Cursor CLI，最后才回退到 App URL 打开。
+- Codex：通过发现到的 `codex` 绝对路径执行 `codex app <项目路径>`，并把子进程工作目录同步设为该项目路径；没有 CLI 时回退到 Codex App。
+- Cursor：优先执行 Cursor App 内置 CLI 的 `cursor --new-window <项目路径>`，同时把子进程工作目录同步设为该项目路径，保证指定目录被打开；没有内置 CLI 时查找 PATH 中的 Cursor CLI，最后才回退到 App URL 打开。
 - Claude Code：通过设置中选择的终端在项目目录中启动交互式 `claude`。当前支持已安装的 Otty 和 Terminal.app；Otty 使用 `otty-cli`，Terminal 适配器首次使用时 macOS 可能请求 Automation 权限。
 - Grok Build：发现 `grok` CLI（包含 `~/.grok/bin/grok`），并通过所选终端在项目目录中启动交互式 Grok Build TUI。
 

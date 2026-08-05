@@ -232,6 +232,59 @@ enum ToubarReplaceSmokeTest {
             "Cursor must open the selected project in a new window",
             failures: &failures
         )
+        let currentDirectory = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath
+        ).standardizedFileURL
+        let agentProcess = AgentProcess.make(
+            executableURL: URL(fileURLWithPath: "/usr/bin/true"),
+            arguments: ["workspace-test"],
+            workingDirectory: currentDirectory,
+            inheritedEnvironment: ["PATH": "/usr/bin"]
+        )
+        expect(
+            agentProcess.currentDirectoryURL?.standardizedFileURL
+                == currentDirectory,
+            "Agent processes must inherit the selected Workspace directory",
+            failures: &failures
+        )
+        expect(
+            agentProcess.arguments == ["workspace-test"],
+            "Agent process configuration must preserve launch arguments",
+            failures: &failures
+        )
+        expect(
+            agentProcess.environment?["PATH"] == "/usr/bin:/usr/bin",
+            "Agent process configuration must preserve executable discovery",
+            failures: &failures
+        )
+        let pwdPipe = Pipe()
+        let pwdProcess = AgentProcess.make(
+            executableURL: URL(fileURLWithPath: "/bin/pwd"),
+            arguments: [],
+            workingDirectory: currentDirectory,
+            inheritedEnvironment: ["PATH": "/usr/bin:/bin"]
+        )
+        pwdProcess.standardOutput = pwdPipe
+        pwdProcess.standardError = FileHandle.nullDevice
+        do {
+            try pwdProcess.run()
+            pwdProcess.waitUntilExit()
+            let output = String(
+                data: pwdPipe.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8
+            )?.trimmingCharacters(in: .whitespacesAndNewlines)
+            expect(
+                pwdProcess.terminationStatus == 0
+                    && output == currentDirectory.path,
+                "Agent subprocess did not start in the selected "
+                    + "Workspace directory",
+                failures: &failures
+            )
+        } catch {
+            failures.append(
+                "Agent subprocess working-directory probe failed: \(error)"
+            )
+        }
         let testToolURL = URL(fileURLWithPath: "/tmp/Claude Tool/claude")
         let testProjectURL = URL(fileURLWithPath: "/tmp/Project Folder")
         expect(
@@ -265,9 +318,6 @@ enum ToubarReplaceSmokeTest {
                 ),
             "Terminal launch must reuse its initial window when starting",
             failures: &failures
-        )
-        let currentDirectory = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath
         )
         expect(
             WorkspacePathResolver.existingDirectory(at: currentDirectory)

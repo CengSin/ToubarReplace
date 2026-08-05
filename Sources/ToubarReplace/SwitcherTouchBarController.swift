@@ -1,30 +1,55 @@
 import AppKit
+import TouchBarPrivateAPI
 
 @MainActor
 final class SwitcherTouchBarController: NSObject, NSTouchBarDelegate {
+    private enum ItemIdentifier {
+        static let switcher = NSTouchBarItem.Identifier(
+            "com.toubarreplace.switcher"
+        )
+    }
+
+    // Placement 0 tends to put the item toward the left of the app region.
+    private static let placement: Int64 = 0
+
     let touchBar = NSTouchBar()
+    private(set) var isPresented = false
     var onToggleWorkspace: (() -> Void)?
 
     override init() {
         super.init()
         touchBar.delegate = self
-        touchBar.defaultItemIdentifiers = [
-            NSTouchBarItem.Identifier(rawValue: "com.toubarreplace.switcher")
-        ]
+        touchBar.defaultItemIdentifiers = [ItemIdentifier.switcher]
         touchBar.customizationAllowedItemIdentifiers = []
+    }
+
+    func present() {
+        guard !isPresented else { return }
+        guard TBRCanPresentSystemModalTouchBar() else { return }
+
+        isPresented = true
+        TBRSetSystemModalShowsCloseBoxWhenFrontMost(false)
+        TBRPresentSystemModalTouchBar(touchBar, Self.placement)
+        TBRHideSystemModalCloseButton()
+    }
+
+    func dismiss() {
+        guard isPresented else { return }
+        TBRDismissSystemModalTouchBar(touchBar)
+        TBRSetSystemModalShowsCloseBoxWhenFrontMost(true)
+        isPresented = false
     }
 
     func touchBar(
         _ touchBar: NSTouchBar,
         makeItemForIdentifier identifier: NSTouchBarItem.Identifier
     ) -> NSTouchBarItem? {
-        if identifier.rawValue == "com.toubarreplace.switcher" {
-            let item = NSCustomTouchBarItem(identifier: identifier)
-            item.customizationLabel = "Workspace"
-            item.view = createSwitchButton()
-            return item
-        }
-        return nil
+        guard identifier == ItemIdentifier.switcher else { return nil }
+
+        let item = NSCustomTouchBarItem(identifier: identifier)
+        item.customizationLabel = "Workspace"
+        item.view = createSwitchButton()
+        return item
     }
 
     private func createSwitchButton() -> NSView {
@@ -38,15 +63,17 @@ final class SwitcherTouchBarController: NSObject, NSTouchBarDelegate {
         button.bezelStyle = .texturedRounded
         button.imageScaling = .scaleProportionallyDown
         button.imagePosition = .imageOnly
-        button.widthAnchor.constraint(equalToConstant: 64).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 64).isActive = true
+        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
         button.target = self
         button.action = #selector(toggleWorkspace)
-        button.toolTip = "点击切换 Workspace 模式"
+        button.toolTip = "点击打开 Workspace"
+        button.setAccessibilityLabel("打开 Workspace")
         return button
     }
 
-    @objc private func toggleWorkspace() {
+    @objc
+    private func toggleWorkspace() {
         onToggleWorkspace?()
     }
 }

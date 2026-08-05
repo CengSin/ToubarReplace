@@ -185,6 +185,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         terminalAdapterRegistry: terminalAdapterRegistry
     )
     private let workspaceTouchBarController = WorkspaceTouchBarController()
+    private let switcherTouchBarController = SwitcherTouchBarController()
     private var workspaceSwitcherWindowController:
         WorkspaceSwitcherWindowController?
     private var hasRestoredFrame = false
@@ -320,6 +321,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         showFloatingWorkspaceSwitcherIfNeeded()
         idleOpacityController.start()
         capture.start()
+        // Show the physical Touch Bar switcher button in mirror mode.
+        presentPhysicalSwitcherIfNeeded()
     }
 
     func stop() {
@@ -327,6 +330,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         finderSyncTask?.cancel()
         finderSyncTask = nil
         workspaceTouchBarController.dismiss()
+        switcherTouchBarController.dismiss()
         workspaceSwitcherWindowController?.window?.orderOut(nil)
         idleOpacityController.stop()
         capture.stop()
@@ -547,6 +551,10 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         workspaceTouchBarController.onPresentationInterrupted = { [weak self] in
             self?.handleWorkspacePresentationInterrupted()
         }
+        switcherTouchBarController.onToggleWorkspace = { [weak self] in
+            self?.lastFrontmostContext = FrontmostAppContext.capture()
+            self?.toggleWorkspace()
+        }
     }
 
     private func configureFloatingWorkspaceSwitcher() {
@@ -587,6 +595,11 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         controller.window?.orderFrontRegardless()
     }
 
+    private func presentPhysicalSwitcherIfNeeded() {
+        guard isRunning, rootView.scene == .mirror else { return }
+        switcherTouchBarController.present()
+    }
+
     private func toggleWorkspace() {
         switch rootView.scene {
         case .mirror:
@@ -600,6 +613,10 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 .workspace
             )
             idleOpacityController.suspendAtFullOpacity()
+
+            // Replace the small switcher bar with the full Workspace bar.
+            switcherTouchBarController.dismiss()
+
             do {
                 try workspaceTouchBarController.present()
                 rootView.setWorkspaceFallbackVisible(false)
@@ -610,6 +627,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     agents: []
                 )
                 rootView.setWorkspaceFallbackVisible(true)
+                // Fall back: put the switcher button back if Workspace failed.
+                presentPhysicalSwitcherIfNeeded()
                 return
             }
 
@@ -644,6 +663,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         idleOpacityController.resumeFrameDrivenOpacity()
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
+
+        // Restore the physical Touch Bar switcher button.
+        presentPhysicalSwitcherIfNeeded()
     }
 
     private func handleWorkspacePresentationInterrupted() {
@@ -656,6 +678,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         idleOpacityController.resumeFrameDrivenOpacity()
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
+
+        // Restore the physical Touch Bar switcher button.
+        presentPhysicalSwitcherIfNeeded()
     }
 
     private func resolveWorkspacePath(refreshFrontmostContext: Bool) {
@@ -842,6 +867,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                         if self?.rootView.scene == .workspace {
                             self?.closeWorkspace()
                         }
+                        self?.switcherTouchBarController.dismiss()
                         self?.capture.stop()
                     }
                 }
@@ -858,6 +884,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     Task { @MainActor [weak self] in
                         guard self?.isRunning == true else { return }
                         self?.capture.restart()
+                        self?.presentPhysicalSwitcherIfNeeded()
                     }
                 }
             )
@@ -888,33 +915,5 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 }
             }
         )
-    }
-
-    private func scheduleFinderPathSync() {
-        finderSyncTask?.cancel()
-        finderSyncTask = Task { @MainActor [weak self] in
-            for delay in [150, 300, 500] {
-                try? await Task.sleep(for: .milliseconds(delay))
-                guard
-                    !Task.isCancelled,
-                    let self,
-                    self.isRunning,
-                    self.rootView.scene == .workspace
-                else {
-                    return
-                }
-                let frontmostContext = FrontmostAppContext.capture()
-                guard frontmostContext.isFinder else { return }
-                guard
-                    let context = self.workspacePathResolver
-                        .resolveFrontmostPath(from: frontmostContext)
-                else {
-                    continue
-                }
-                self.lastFrontmostContext = frontmostContext
-                self.acceptWorkspaceContext(context)
-                return
-            }
-        }
     }
 }

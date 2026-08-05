@@ -339,6 +339,7 @@ final class WorkspaceTouchBarPathView: NSView {
 @MainActor
 final class WorkspaceAgentScrubber: NSScrubber {
     private let edgeMask = CAGradientLayer()
+    private var contentOverflows = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -351,12 +352,20 @@ final class WorkspaceAgentScrubber: NSScrubber {
         ]
         edgeMask.startPoint = CGPoint(x: 0, y: 0.5)
         edgeMask.endPoint = CGPoint(x: 1, y: 0.5)
-        layer?.mask = edgeMask
+        // 不在这里直接挂 mask了，改为按 setContentOverflows 按需开关
     }
 
     @available(*, unavailable)
     required init(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// 由 layout 在 prepare() 时回调，告知内容是否超出可视宽度。
+    /// 只有溢出时才需要边缘渐变，暗示"这里可以滑动"。
+    func setContentOverflows(_ overflows: Bool) {
+        guard overflows != contentOverflows else { return }
+        contentOverflows = overflows
+        layer?.mask = overflows ? edgeMask : nil
     }
 
     override func layout() {
@@ -389,7 +398,14 @@ final class WorkspaceCenteredScrubberFlowLayout: NSScrubberFlowLayout {
         let itemCount = scrubber.numberOfItems
         let itemsWidth = CGFloat(itemCount) * itemSize.width
             + CGFloat(max(itemCount - 1, 0)) * itemSpacing
-        horizontalInset = max((visibleRect.width - itemsWidth) / 2, 0)
+        let overflows = itemsWidth > visibleRect.width
+
+        // 未溢出：把内容居中显示；溢出：贴左对齐，交给滑动+渐变来处理
+        horizontalInset = overflows
+            ? 0
+            : max((visibleRect.width - itemsWidth) / 2, 0)
+
+        (scrubber as? WorkspaceAgentScrubber)?.setContentOverflows(overflows)
     }
 
     override var scrubberContentSize: NSSize {

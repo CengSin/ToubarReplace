@@ -813,15 +813,15 @@ final class WorkspaceTouchBarController: NSObject,
     }
 
     func scrubber(
-        _ scrubber: NSScrubber,
-        viewForItemAt index: Int
+    _ scrubber: NSScrubber,
+    viewForItemAt index: Int
     ) -> NSScrubberItemView {
         guard
-            let view = scrubber.makeItem(
-                withIdentifier: ItemIdentifier.agentView,
-                owner: self
-            ) as? WorkspaceTouchBarAgentItemView,
-            agents.indices.contains(index)
+        let view = scrubber.makeItem(
+            withIdentifier: ItemIdentifier.agentView,
+            owner: self
+        ) as? WorkspaceTouchBarAgentItemView,
+        agents.indices.contains(index)
         else {
             return NSScrubberItemView()
         }
@@ -832,12 +832,13 @@ final class WorkspaceTouchBarController: NSObject,
     func scrubber(_ scrubber: NSScrubber, didSelectItemAt index: Int) {
         guard agentsEnabled, agents.indices.contains(index) else { return }
 
-        let previousIndex = selectedAgentIndex
+        let agent = agents[index]
         selectedAgentIndex = index
+        onAgentActivated?(agent)
 
-        if previousIndex != index {
-            onAgentActivated?(agents[index])
-        }
+        // 点击后主动清空选中态，避免下一次点同一个 item 时因为状态未变化而被框架吞掉
+        // （我们只保留 internal memory，不让 scrubber.selectedIndex 记住它）
+        selectedAgentIndex = nil
     }
 
     private func reloadAgents(enabled: Bool, placeholder: String? = nil) {
@@ -850,7 +851,9 @@ final class WorkspaceTouchBarController: NSObject,
                 agents.indices.contains(index) ? index : nil
             } ?? 0
             selectedAgentIndex = selectedIndex
-            scrubber.selectedIndex = selectedIndex
+
+            // 不再设置 scrubber.selectedIndex，避免 item 一开始就被标记为"已选中"
+            // 只会做居中滚动，不触发选中态
             scrubber.scrubberLayout.invalidateLayout()
             scrubber.scrollItem(
                 at: selectedIndex,

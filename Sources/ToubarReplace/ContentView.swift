@@ -786,15 +786,16 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     agent,
                     at: context.directoryURL
                 )
+                // 启动成功后始终恢复状态（无论 autoCollapse 如何）
+                self.rootView.workspaceView.showReady(
+                    context: context,
+                    agents: self.availableAgents
+                )
+                self.workspaceTouchBarController.showReady(
+                    context: context,
+                    agents: self.availableAgents
+                )
                 guard WorkspacePreferences.autoCollapse else {
-                    self.rootView.workspaceView.showReady(
-                        context: context,
-                        agents: self.availableAgents
-                    )
-                    self.workspaceTouchBarController.showReady(
-                        context: context,
-                        agents: self.availableAgents
-                    )
                     return
                 }
                 Task { @MainActor [weak self] in

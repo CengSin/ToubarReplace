@@ -869,15 +869,22 @@ final class AgentLauncher {
         process.standardError = FileHandle.nullDevice
 
         try process.run()
-        while process.isRunning {
-            try? await Task.sleep(for: .milliseconds(50))
+
+        // 仅等待一小段时间，确认进程没有立刻崩溃退出
+        // （比如可执行文件缺失、参数错误导致秒退）
+        // 不再等待进程完全跑完——像 Claude Code / Cursor 这类长期驻留的
+        // 交互式进程，不会自己退出，等它退出可能是几分钟甚至永远不退出。
+        try? await Task.sleep(for: .milliseconds(300))
+        guard process.isRunning else {
+            guard process.terminationStatus == 0 else {
+                throw AgentLaunchError.processFailed(
+                    agentName: agentName,
+                    status: process.terminationStatus
+                )
+            }
+            return // 进程退出且状态 0，视为成功启动（极少见）
         }
-        guard process.terminationStatus == 0 else {
-            throw AgentLaunchError.processFailed(
-                agentName: agentName,
-                status: process.terminationStatus
-            )
-        }
+        // 否则进程还活着，视为正常启动成功
     }
 }
 

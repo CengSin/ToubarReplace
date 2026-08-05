@@ -576,6 +576,9 @@ final class WorkspaceTouchBarController: NSObject,
         static let agentView = NSUserInterfaceItemIdentifier(
             "com.toubarreplace.workspace.agent-view"
         )
+        static let switcher = NSTouchBarItem.Identifier(
+            "com.toubarreplace.workspace.switcher"
+        )
     }
 
     private let touchBar = NSTouchBar()
@@ -605,6 +608,7 @@ final class WorkspaceTouchBarController: NSObject,
         touchBar.delegate = self
         touchBar.defaultItemIdentifiers = [
             ItemIdentifier.content,
+            ItemIdentifier.switcher,
         ]
         touchBar.principalItemIdentifier = ItemIdentifier.content
         touchBar.customizationAllowedItemIdentifiers = []
@@ -818,6 +822,11 @@ final class WorkspaceTouchBarController: NSObject,
             preferredWidth.priority = .defaultHigh
             preferredWidth.isActive = true
             item.view = contentView
+            return item
+        case ItemIdentifier.switcher:
+            let item = NSCustomTouchBarItem(identifier: identifier)
+            item.customizationLabel = "切换"
+            item.view = createSwitchButton()
             return item
         default:
             return nil

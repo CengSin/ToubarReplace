@@ -609,7 +609,7 @@ final class WorkspaceTouchBarController: NSObject,
         layout.itemSpacing = WorkspaceTouchBarStyle.itemSpacing
         scrubber.scrubberLayout = layout
         scrubber.mode = .free
-        scrubber.isContinuous = true
+        scrubber.isContinuous = false
         scrubber.itemAlignment = .center
         scrubber.showsArrowButtons = false
         scrubber.showsAdditionalContentIndicators = false
@@ -831,10 +831,12 @@ final class WorkspaceTouchBarController: NSObject,
 
     func scrubber(_ scrubber: NSScrubber, didSelectItemAt index: Int) {
         guard agentsEnabled, agents.indices.contains(index) else { return }
-        if selectedAgentIndex == index {
+
+        let previousIndex = selectedAgentIndex
+        selectedAgentIndex = index
+
+        if previousIndex != index {
             onAgentActivated?(agents[index])
-        } else {
-            selectedAgentIndex = index
         }
     }
 

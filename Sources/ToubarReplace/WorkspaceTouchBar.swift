@@ -4,8 +4,6 @@ import TouchBarPrivateAPI
 enum WorkspaceTouchBarLayout {
     static let presentationMode = "app"
     static let placement: Int64 = 1
-    // Keep the combined item within the app region even when macOS still
-    // reserves space for the Control Strip during the presentation transition.
     static let preferredContentWidth: CGFloat = 680
     static let minimumContentWidth: CGFloat = 520
     static let contentGap: CGFloat = 12
@@ -74,18 +72,12 @@ enum WorkspaceTouchBarStyle {
     static let agentEdgeFadeWidth: CGFloat = 8
     @MainActor
     static var titleFont: NSFont {
-        NSFont.systemFont(
-            ofSize: 12,
-            weight: .semibold
-        )
+        NSFont.systemFont(ofSize: 12, weight: .semibold)
     }
 
     @MainActor
     static var secondaryFont: NSFont {
-        NSFont.systemFont(
-            ofSize: 10,
-            weight: .regular
-        )
+        NSFont.systemFont(ofSize: 10, weight: .regular)
     }
 
     static let failureSymbolName: String? = nil
@@ -100,10 +92,7 @@ enum WorkspaceTouchBarStyle {
             systemSymbolName: name,
             accessibilityDescription: accessibilityDescription
         )?.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(
-                pointSize: 11,
-                weight: .medium
-            )
+            NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
         )
     }
 
@@ -140,10 +129,7 @@ enum WorkspaceTouchBarStyle {
         }
         guard let sourceImage else { return nil }
 
-        let targetSize = NSSize(
-            width: agentIconSize,
-            height: agentIconSize
-        )
+        let targetSize = NSSize(width: agentIconSize, height: agentIconSize)
         let icon = NSImage(size: targetSize, flipped: false) { rect in
             NSGraphicsContext.current?.imageInterpolation = .high
             sourceImage.draw(
@@ -181,8 +167,7 @@ final class WorkspaceTouchBarContentView: NSView {
             .dividerColor.cgColor
         addSubview(dividerView)
         agentsPlaceholder.font = WorkspaceTouchBarStyle.secondaryFont
-        agentsPlaceholder.textColor = WorkspaceTouchBarStyle
-            .secondaryTextColor
+        agentsPlaceholder.textColor = WorkspaceTouchBarStyle.secondaryTextColor
         agentsPlaceholder.alignment = .center
         agentsPlaceholder.lineBreakMode = .byTruncatingTail
         agentsPlaceholder.isHidden = true
@@ -266,9 +251,7 @@ final class WorkspaceTouchBarPathView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-        true
-    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func layout() {
         super.layout()
@@ -294,8 +277,7 @@ final class WorkspaceTouchBarPathView: NSView {
             x: titleX,
             y: floor(bounds.midY - titleHeight / 2),
             width: max(
-                bounds.width - titleX
-                    - WorkspaceTouchBarStyle.horizontalPadding,
+                bounds.width - titleX - WorkspaceTouchBarStyle.horizontalPadding,
                 0
             ),
             height: titleHeight
@@ -308,8 +290,7 @@ final class WorkspaceTouchBarPathView: NSView {
         return true
     }
 
-    @objc
-    private func activatePath() {
+    @objc private func activatePath() {
         guard isInteractionEnabled else { return }
         onActivate?()
     }
@@ -352,7 +333,6 @@ final class WorkspaceAgentScrubber: NSScrubber {
         ]
         edgeMask.startPoint = CGPoint(x: 0, y: 0.5)
         edgeMask.endPoint = CGPoint(x: 1, y: 0.5)
-        // 不在这里直接挂 mask了，改为按 setContentOverflows 按需开关
     }
 
     @available(*, unavailable)
@@ -360,8 +340,6 @@ final class WorkspaceAgentScrubber: NSScrubber {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// 由 layout 在 prepare() 时回调，告知内容是否超出可视宽度。
-    /// 只有溢出时才需要边缘渐变，暗示"这里可以滑动"。
     func setContentOverflows(_ overflows: Bool) {
         guard overflows != contentOverflows else { return }
         contentOverflows = overflows
@@ -372,8 +350,7 @@ final class WorkspaceAgentScrubber: NSScrubber {
         super.layout()
         edgeMask.frame = bounds
         let fadeFraction = min(
-            WorkspaceTouchBarStyle.agentEdgeFadeWidth
-                / max(bounds.width, 1),
+            WorkspaceTouchBarStyle.agentEdgeFadeWidth / max(bounds.width, 1),
             0.28
         )
         edgeMask.locations = [
@@ -399,12 +376,9 @@ final class WorkspaceCenteredScrubberFlowLayout: NSScrubberFlowLayout {
         let itemsWidth = CGFloat(itemCount) * itemSize.width
             + CGFloat(max(itemCount - 1, 0)) * itemSpacing
         let overflows = itemsWidth > visibleRect.width
-
-        // 未溢出：把内容居中显示；溢出：贴左对齐，交给滑动+渐变来处理
         horizontalInset = overflows
             ? 0
             : max((visibleRect.width - itemsWidth) / 2, 0)
-
         (scrubber as? WorkspaceAgentScrubber)?.setContentOverflows(overflows)
     }
 
@@ -443,7 +417,6 @@ final class WorkspaceCenteredScrubberFlowLayout: NSScrubberFlowLayout {
             }
         )
     }
-
 }
 
 enum WorkspaceTouchBarPresentationError: LocalizedError {
@@ -570,6 +543,9 @@ final class WorkspaceTouchBarController: NSObject,
     NSScrubberDelegate
 {
     private enum ItemIdentifier {
+        static let switcher = NSTouchBarItem.Identifier(
+            "com.toubarreplace.workspace.switcher"
+        )
         static let content = NSTouchBarItem.Identifier(
             "com.toubarreplace.workspace.content"
         )
@@ -599,11 +575,13 @@ final class WorkspaceTouchBarController: NSObject,
     var onResolvePath: (() -> Void)?
     var onAgentActivated: ((AvailableAgent) -> Void)?
     var onPresentationInterrupted: (() -> Void)?
+    var onToggleWorkspace: (() -> Void)?
 
     override init() {
         super.init()
         touchBar.delegate = self
         touchBar.defaultItemIdentifiers = [
+            ItemIdentifier.switcher,
             ItemIdentifier.content,
         ]
         touchBar.principalItemIdentifier = ItemIdentifier.content
@@ -682,9 +660,7 @@ final class WorkspaceTouchBarController: NSObject,
         case let .set(mode):
             TouchBarPresentationPreferences.setCurrentMode(mode)
         case .remove:
-            TouchBarPresentationPreferences.setCurrentMode(
-                nil
-            )
+            TouchBarPresentationPreferences.setCurrentMode(nil)
         }
         TBRDismissSystemModalTouchBar(touchBar)
         TBRSetSystemModalShowsCloseBoxWhenFrontMost(true)
@@ -735,10 +711,7 @@ final class WorkspaceTouchBarController: NSObject,
         reloadAgents(enabled: false, placeholder: "正在读取项目…")
     }
 
-    func showReady(
-        context: WorkspaceContext,
-        agents: [AvailableAgent]
-    ) {
+    func showReady(context: WorkspaceContext, agents: [AvailableAgent]) {
         self.context = context
         self.agents = agents
         pathView.display(
@@ -756,10 +729,7 @@ final class WorkspaceTouchBarController: NSObject,
         )
     }
 
-    func showLaunching(
-        agent: AvailableAgent,
-        context: WorkspaceContext
-    ) {
+    func showLaunching(agent: AvailableAgent, context: WorkspaceContext) {
         pathView.display(
             image: WorkspaceTouchBarStyle.symbol(
                 named: "hourglass",
@@ -805,6 +775,11 @@ final class WorkspaceTouchBarController: NSObject,
         makeItemForIdentifier identifier: NSTouchBarItem.Identifier
     ) -> NSTouchBarItem? {
         switch identifier {
+        case ItemIdentifier.switcher:
+            let item = NSCustomTouchBarItem(identifier: identifier)
+            item.customizationLabel = "返回镜像"
+            item.view = createReturnButton()
+            return item
         case ItemIdentifier.content:
             let item = NSCustomTouchBarItem(identifier: identifier)
             item.customizationLabel = "Workspace"
@@ -829,15 +804,15 @@ final class WorkspaceTouchBarController: NSObject,
     }
 
     func scrubber(
-    _ scrubber: NSScrubber,
-    viewForItemAt index: Int
+        _ scrubber: NSScrubber,
+        viewForItemAt index: Int
     ) -> NSScrubberItemView {
         guard
-        let view = scrubber.makeItem(
-            withIdentifier: ItemIdentifier.agentView,
-            owner: self
-        ) as? WorkspaceTouchBarAgentItemView,
-        agents.indices.contains(index)
+            let view = scrubber.makeItem(
+                withIdentifier: ItemIdentifier.agentView,
+                owner: self
+            ) as? WorkspaceTouchBarAgentItemView,
+            agents.indices.contains(index)
         else {
             return NSScrubberItemView()
         }
@@ -847,14 +822,35 @@ final class WorkspaceTouchBarController: NSObject,
 
     func scrubber(_ scrubber: NSScrubber, didSelectItemAt index: Int) {
         guard agentsEnabled, agents.indices.contains(index) else { return }
-
         let agent = agents[index]
         selectedAgentIndex = index
         onAgentActivated?(agent)
-
-        // 点击后主动清空选中态，避免下一次点同一个 item 时因为状态未变化而被框架吞掉
-        // （我们只保留 internal memory，不让 scrubber.selectedIndex 记住它）
         selectedAgentIndex = nil
+    }
+
+    private func createReturnButton() -> NSView {
+        let button = NSButton()
+        button.image = NSImage(
+            systemSymbolName: "rectangle.on.rectangle.slash",
+            accessibilityDescription: "返回 Touch Bar 镜像"
+        )
+        button.contentTintColor = NSColor.white
+        button.isBordered = false
+        button.bezelStyle = .texturedRounded
+        button.imageScaling = .scaleProportionallyDown
+        button.imagePosition = .imageOnly
+        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        button.target = self
+        button.action = #selector(toggleWorkspace)
+        button.toolTip = "点击返回 Touch Bar 镜像"
+        button.setAccessibilityLabel("返回 Touch Bar 镜像")
+        return button
+    }
+
+    @objc
+    private func toggleWorkspace() {
+        onToggleWorkspace?()
     }
 
     private func reloadAgents(enabled: Bool, placeholder: String? = nil) {
@@ -867,14 +863,8 @@ final class WorkspaceTouchBarController: NSObject,
                 agents.indices.contains(index) ? index : nil
             } ?? 0
             selectedAgentIndex = selectedIndex
-
-            // 不再设置 scrubber.selectedIndex，避免 item 一开始就被标记为"已选中"
-            // 只会做居中滚动，不触发选中态
             scrubber.scrubberLayout.invalidateLayout()
-            scrubber.scrollItem(
-                at: selectedIndex,
-                to: .center
-            )
+            scrubber.scrollItem(at: selectedIndex, to: .center)
         } else {
             selectedAgentIndex = nil
         }

@@ -388,21 +388,20 @@ enum WorkspaceTouchBarStyle {
 
     /// Bundled brand mark used when the agent has no local app icon.
     /// Source files live under `Resources/AgentIcons/<AgentID.rawValue>.png`.
-    /// SPM `.process` flattens them to the module bundle root; the packaged
-    /// `.app` also keeps a copy at `Contents/Resources/AgentIcons/`.
+    ///
+    /// Resolution order (do **not** use `Bundle.module` here):
+    /// - Packaged `.app`: `Contents/Resources/AgentIcons/` (see `Packaging/build-app.sh`)
+    /// - `swift run` / release binary: SPM resource dir next to the executable
+    ///   (`ToubarReplace_ToubarReplace.bundle`, flattened by `.process`)
+    ///
+    /// `Bundle.module` for an `executableTarget` looks for the resource bundle
+    /// at `Bundle.main.bundleURL` (the `.app` root) and `fatalError`s if missing.
+    /// That path is invalid for codesigned apps, and SPM's flat `.bundle` is not
+    /// a codesignable package — so packaging copies icons into main Resources only.
     @MainActor
     static func agentDefaultIcon(for id: AgentID) -> NSImage? {
         let resourceName = id.rawValue
-        let candidates: [URL?] = [
-            Bundle.module.url(
-                forResource: resourceName,
-                withExtension: "png"
-            ),
-            Bundle.module.url(
-                forResource: resourceName,
-                withExtension: "png",
-                subdirectory: "AgentIcons"
-            ),
+        var candidates: [URL?] = [
             Bundle.main.url(
                 forResource: resourceName,
                 withExtension: "png",
@@ -412,6 +411,21 @@ enum WorkspaceTouchBarStyle {
                 .appendingPathComponent("AgentIcons", isDirectory: true)
                 .appendingPathComponent("\(resourceName).png"),
         ]
+        // SPM layout: resource bundle sits beside the executable (not under .app root).
+        if let exeDir = Bundle.main.executableURL?.deletingLastPathComponent() {
+            let spmBundle = exeDir.appendingPathComponent(
+                "ToubarReplace_ToubarReplace.bundle",
+                isDirectory: true
+            )
+            candidates.append(
+                spmBundle.appendingPathComponent("\(resourceName).png")
+            )
+            candidates.append(
+                spmBundle
+                    .appendingPathComponent("AgentIcons", isDirectory: true)
+                    .appendingPathComponent("\(resourceName).png")
+            )
+        }
         for candidate in candidates {
             guard let url = candidate,
                 FileManager.default.fileExists(atPath: url.path),

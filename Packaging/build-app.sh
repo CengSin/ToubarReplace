@@ -26,15 +26,16 @@ cp "Packaging/Info.plist" "$APP_DIR/Contents/Info.plist"
   "$APP_DIR/Contents/Info.plist"
 cp "Resources/AppIcon-source.png" "$APP_DIR/Contents/Resources/AppIcon.png"
 # Bundled Agent brand marks (fallback when no local .app icon).
+# Loaded at runtime via Bundle.main …/AgentIcons/ (see agentDefaultIcon).
+# Do NOT copy SPM's ToubarReplace_ToubarReplace.bundle into the .app:
+# swift build emits a flat directory of loose files (no Info.plist), so
+# codesign --deep fails with "bundle format unrecognized, invalid, or unsuitable".
+# Putting that folder at the .app root also breaks modern app layout
+# ("unsealed contents present in the bundle root").
 if [[ -d "Sources/ToubarReplace/Resources/AgentIcons" ]]; then
   mkdir -p "$APP_DIR/Contents/Resources/AgentIcons"
   cp Sources/ToubarReplace/Resources/AgentIcons/*.png \
     "$APP_DIR/Contents/Resources/AgentIcons/"
-fi
-# SPM resource bundle (Bundle.module) when present next to the release binary.
-SPM_BUNDLE="$(dirname "$BINARY_PATH")/ToubarReplace_ToubarReplace.bundle"
-if [[ -d "$SPM_BUNDLE" ]]; then
-  cp -R "$SPM_BUNDLE" "$APP_DIR/Contents/MacOS/"
 fi
 chmod +x "$APP_DIR/Contents/MacOS/ToubarReplace"
 

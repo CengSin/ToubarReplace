@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import UniformTypeIdentifiers
 
 @MainActor
 final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
@@ -15,6 +16,9 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
         }
         controller.onRequestWorkspaceDirectory = { [weak self] completion in
             self?.chooseWorkspaceDirectory(completion: completion)
+        }
+        controller.onRequestCustomApplication = { [weak self] completion in
+            self?.chooseCustomApplication(completion: completion)
         }
         windowController = controller
         installStatusItem()
@@ -229,6 +233,38 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self?.windowController?.ensurePhysicalSwitcherPresented()
                 completion(directoryURL)
+            }
+        }
+    }
+
+    private func chooseCustomApplication(
+        completion: @escaping (URL?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.title = "选择常用应用"
+        panel.prompt = "添加"
+        panel.message = "最多 3 个；再添加时会按先进先出替换最早的应用"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(
+            fileURLWithPath: "/Applications",
+            isDirectory: true
+        )
+
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            Task { @MainActor in
+                let applicationURL = response == .OK ? panel.url : nil
+                if self?.settingsWindowController?.window?.isVisible != true {
+                    NSApp.setActivationPolicy(.accessory)
+                }
+                self?.windowController?.ensurePhysicalSwitcherPresented()
+                completion(applicationURL)
             }
         }
     }

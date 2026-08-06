@@ -130,19 +130,156 @@ enum ToubarReplaceSmokeTest {
             failures: &failures
         )
         expect(
-            WorkspaceTouchBarLayout.pathFraction == 0.70,
-            "Workspace path region must use seventy percent of the content",
+            CustomWorkspaceAppList.maxCount == 3,
+            "Workspace custom apps must cap at three favorites",
+            failures: &failures
+        )
+        let fifoSeed = [
+            CustomWorkspaceApp(
+                bundleIdentifier: "a.one",
+                applicationPath: "/Applications/One.app",
+                displayName: "One"
+            ),
+            CustomWorkspaceApp(
+                bundleIdentifier: "a.two",
+                applicationPath: "/Applications/Two.app",
+                displayName: "Two"
+            ),
+            CustomWorkspaceApp(
+                bundleIdentifier: "a.three",
+                applicationPath: "/Applications/Three.app",
+                displayName: "Three"
+            ),
+        ]
+        let fifoAfter = CustomWorkspaceAppList.inserting(
+            CustomWorkspaceApp(
+                bundleIdentifier: "a.four",
+                applicationPath: "/Applications/Four.app",
+                displayName: "Four"
+            ),
+            into: fifoSeed
+        )
+        expect(
+            fifoAfter.map(\.bundleIdentifier) == ["a.two", "a.three", "a.four"],
+            "custom app insert must FIFO-evict the oldest entry",
+            failures: &failures
+        )
+        let fifoDedupe = CustomWorkspaceAppList.inserting(
+            CustomWorkspaceApp(
+                bundleIdentifier: "a.two",
+                applicationPath: "/Applications/Two.app",
+                displayName: "Two"
+            ),
+            into: fifoSeed
+        )
+        expect(
+            fifoDedupe.map(\.bundleIdentifier) == ["a.one", "a.three", "a.two"],
+            "re-adding an existing custom app must move it to newest",
             failures: &failures
         )
         expect(
-            WorkspaceTouchBarLayout.preferredContentWidth == 680
+            WorkspaceTouchBarLayout.totalUnits == 10
+                && WorkspaceTouchBarLayout.pathUnits == 4
+                && WorkspaceTouchBarLayout.agentsUnits == 3
+                && WorkspaceTouchBarLayout.customUnits == 3
+                && abs(WorkspaceTouchBarLayout.pathRegionScale - 0.9) < 0.001
+                && WorkspaceTouchBarLayout.minimumContentWidth == 400
+                && WorkspaceTouchBarLayout.designReferenceBarWidth == 1_010
+                && WorkspaceTouchBarLayout.maximumContentWidth == 1_010
+                && WorkspaceTouchBarLayout.switcherWidth == 44
+                && WorkspaceTouchBarLayout.zoneContentInset == 6
+                && WorkspaceTouchBarLayout.slotVerticalInset == 3
                 && WorkspaceTouchBarStyle.controlHeight == 30
-                && WorkspaceTouchBarStyle.cornerRadius == 6.25
-                && WorkspaceTouchBarStyle.agentItemWidth == 44
-                && WorkspaceTouchBarStyle.agentIconSize == 26
-                && WorkspaceTouchBarStyle.agentEdgeFadeWidth == 8
-                && WorkspaceTouchBarLayout.contentGap == 12,
-            "Workspace icon row must keep the large-icon geometry",
+                && WorkspaceTouchBarStyle.cornerRadius == 7
+                && WorkspaceTouchBarStyle.trayCornerRadius == 8
+                && WorkspaceTouchBarStyle.agentIconSize == 22
+                && WorkspaceTouchBarStyle.itemSpacing == 6
+                && WorkspaceTouchBarStyle.canvasInset == 4,
+            "Workspace design-v2 10-unit geometry must stay stable",
+            failures: &failures
+        )
+        let settingsPreferred = WorkspaceTouchBarLayout.preferredContentSize(
+            mirrorPixelSize: TouchBarPreferences.defaultMirrorPixelSize,
+            backingScaleFactor: 2
+        )
+        // Mirror default 2300×70 @2x → 1150×35 points, but item width is capped
+        // to maximumContentWidth (1050) so trailing custom slots are not clipped.
+        expect(
+            abs(
+                settingsPreferred.width
+                    - WorkspaceTouchBarLayout.maximumContentWidth
+            ) < 0.5
+                && abs(settingsPreferred.height - 35) < 0.5,
+            "preferred Workspace width must cap at hardware-class maximumContentWidth",
+            failures: &failures
+        )
+        let narrowPreferred = WorkspaceTouchBarLayout.preferredContentWidth(
+            mirrorPixelSize: CGSize(width: 400, height: 60),
+            backingScaleFactor: 2
+        )
+        expect(
+            narrowPreferred == WorkspaceTouchBarLayout.minimumContentWidth,
+            "preferred width must not fall below minimumContentWidth",
+            failures: &failures
+        )
+        let midMirrorPreferred = WorkspaceTouchBarLayout.preferredContentWidth(
+            mirrorPixelSize: CGSize(width: 1_600, height: 70),
+            backingScaleFactor: 2
+        )
+        expect(
+            abs(midMirrorPreferred - 800) < 0.5,
+            "preferred width must track mirror points when below the hardware cap",
+            failures: &failures
+        )
+        let strip = WorkspaceTouchBarLayout.stripFrames(
+            in: NSRect(
+                x: 0,
+                y: 0,
+                width: WorkspaceTouchBarLayout.designReferenceBarWidth,
+                height: 30
+            )
+        )
+        let stripUsable = strip.tray.width
+            - WorkspaceTouchBarLayout.trayTrailingSafeInset
+        let expectedPathWidth = floor(
+            floor(
+                stripUsable * CGFloat(WorkspaceTouchBarLayout.pathUnits)
+                    / CGFloat(WorkspaceTouchBarLayout.totalUnits)
+            ) * WorkspaceTouchBarLayout.pathRegionScale
+        )
+        expect(
+            abs(strip.switcher.width - WorkspaceTouchBarLayout.switcherWidth) < 1
+                && strip.tray.minX > strip.switcher.maxX
+                && abs(strip.path.width - expectedPathWidth) < 1
+                && abs(strip.agents.width - strip.custom.width) <= 1
+                && abs(
+                    strip.path.width + strip.agents.width + strip.custom.width
+                        - stripUsable
+                ) < 1
+                && abs(
+                    strip.switcher.width + WorkspaceTouchBarLayout.switcherContentGap
+                        + strip.tray.width
+                        + WorkspaceTouchBarStyle.canvasInset * 2
+                        - WorkspaceTouchBarLayout.designReferenceBarWidth
+                ) < 2,
+            "full bar strip: switcher outside; path 4/10×0.9; agents|custom share rest",
+            failures: &failures
+        )
+        // Scaled fixed path zone: short path preferred width must not shrink the zone.
+        let fixedGridStrip = WorkspaceTouchBarLayout.stripFrames(
+            in: NSRect(
+                x: 0,
+                y: 0,
+                width: WorkspaceTouchBarLayout.designReferenceBarWidth,
+                height: 30
+            ),
+            pathPreferredWidth: 160
+        )
+        expect(
+            abs(fixedGridStrip.path.width - strip.path.width) < 1
+                && abs(fixedGridStrip.agents.width - strip.agents.width) < 1
+                && abs(fixedGridStrip.custom.width - strip.custom.width) < 1,
+            "path zone width is fixed (scaled 4/10); plate hug must not move dividers",
             failures: &failures
         )
         let pathControl = WorkspaceTouchBarPathView(
@@ -171,28 +308,89 @@ enum ToubarReplaceSmokeTest {
             "undisplayed directories must not use a warning symbol",
             failures: &failures
         )
-        let workspaceRegions = WorkspaceTouchBarLayout.regionFrames(
-            in: NSRect(x: 0, y: 0, width: 1_000, height: 30)
+        let barWidth: CGFloat = 1_000
+        let barBounds = NSRect(x: 0, y: 0, width: barWidth, height: 30)
+        let fullStrip = WorkspaceTouchBarLayout.stripFrames(in: barBounds)
+        let usableTray = fullStrip.tray.width
+            - WorkspaceTouchBarLayout.trayTrailingSafeInset
+        let expectedFullPath = floor(
+            floor(
+                usableTray * CGFloat(WorkspaceTouchBarLayout.pathUnits)
+                    / CGFloat(WorkspaceTouchBarLayout.totalUnits)
+            ) * WorkspaceTouchBarLayout.pathRegionScale
         )
         expect(
-            workspaceRegions.path.width > workspaceRegions.agents.width
-                && workspaceRegions.path.maxX
-                    < workspaceRegions.agents.minX,
-            "Workspace 70/30 regions must be separate and ordered",
+            fullStrip.tray.maxX <= barWidth - WorkspaceTouchBarStyle.canvasInset + 0.5
+                && fullStrip.switcher.minX
+                    >= WorkspaceTouchBarStyle.canvasInset - 0.5,
+            "strip must stay inside canvas insets",
             failures: &failures
         )
-        let centeredWorkspaceControl = WorkspaceTouchBarLayout
-            .centeredControlFrame(
-                in: workspaceRegions.path,
-                preferredWidth: 160
-            )
         expect(
-            centeredWorkspaceControl.midX == workspaceRegions.path.midX
-                && centeredWorkspaceControl.midY
-                    == workspaceRegions.path.midY
-                && centeredWorkspaceControl.height
-                    == WorkspaceTouchBarStyle.controlHeight,
-            "Workspace controls must stay centered inside their regions",
+            fullStrip.path.maxX <= fullStrip.agents.minX + 0.5
+                && fullStrip.agents.maxX <= fullStrip.custom.minX + 0.5,
+            "Workspace path|agents|custom regions must be separate and ordered",
+            failures: &failures
+        )
+        expect(
+            abs(fullStrip.path.width - expectedFullPath) < 1,
+            "path region must be 4/10 of usable tray scaled by pathRegionScale",
+            failures: &failures
+        )
+        expect(
+            abs(fullStrip.agents.width - fullStrip.custom.width) <= 1,
+            "agents and custom must share the remainder equally",
+            failures: &failures
+        )
+        expect(
+            abs(
+                fullStrip.path.width
+                    + fullStrip.agents.width
+                    + fullStrip.custom.width
+                    - usableTray
+            ) < 1,
+            "three zones must cover the usable tray width",
+            failures: &failures
+        )
+        expect(
+            WorkspaceTouchBarLayout.agentSlotCount(agentCount: 4) == 4
+                && WorkspaceTouchBarLayout.customSlotCount(appCount: 2) == 3
+                && WorkspaceTouchBarLayout.customSlotCount(appCount: 0) == 1,
+            "slot counts: agents by count; custom apps+add or empty label",
+            failures: &failures
+        )
+        let agentsInner = WorkspaceTouchBarLayout.zoneContentRect(
+            fullStrip.agents
+        )
+        let agentSlot = WorkspaceTouchBarLayout.equalSlotWidth(
+            regionWidth: agentsInner.width,
+            slotCount: 4
+        )
+        let customInner = WorkspaceTouchBarLayout.zoneContentRect(
+            fullStrip.custom
+        )
+        let customSlot = WorkspaceTouchBarLayout.equalSlotWidth(
+            regionWidth: customInner.width,
+            slotCount: 3
+        )
+        expect(
+            agentSlot > 0 && customSlot > 0,
+            "equal slots inside agents/custom must be positive",
+            failures: &failures
+        )
+        let slots = WorkspaceTouchBarLayout.slotFrames(
+            in: agentsInner,
+            slotCount: 4
+        )
+        let tiledWidth = slots.reduce(CGFloat(0)) { partial, slot in
+            partial + slot.width
+        } + WorkspaceTouchBarStyle.itemSpacing * 3
+        expect(
+            slots.count == 4
+                && abs(slots[0].width - agentSlot) < 1
+                && abs(tiledWidth - agentsInner.width) < 4
+                && slots[0].minX == agentsInner.minX,
+            "agent slots must equal-split the inset agents zone",
             failures: &failures
         )
         expect(

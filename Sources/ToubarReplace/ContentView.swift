@@ -214,6 +214,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     var onRequestWorkspaceDirectory: (
         (@escaping (URL?) -> Void) -> Void
     )?
+    var onRequestCustomApplication: (
+        (@escaping (URL?) -> Void) -> Void
+    )?
 
     init() {
         let scale = NSScreen.main?.backingScaleFactor ?? 2
@@ -595,6 +598,12 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         rootView.workspaceView.onAgentActivated = { [weak self] agent in
             self?.launch(agent)
         }
+        rootView.workspaceView.onAddCustomApp = { [weak self] in
+            self?.addCustomWorkspaceApp()
+        }
+        rootView.workspaceView.onOpenCustomApp = { [weak self] app in
+            self?.openCustomWorkspaceApp(app)
+        }
         rootView.onSwitcherMouseDown = { [weak self] in
             self?.lastFrontmostContext = FrontmostAppContext.capture()
         }
@@ -606,6 +615,12 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         }
         workspaceTouchBarController.onAgentActivated = { [weak self] agent in
             self?.launch(agent)
+        }
+        workspaceTouchBarController.onAddCustomApp = { [weak self] in
+            self?.addCustomWorkspaceApp()
+        }
+        workspaceTouchBarController.onOpenCustomApp = { [weak self] app in
+            self?.openCustomWorkspaceApp(app)
         }
         workspaceTouchBarController.onPresentationInterrupted = { [weak self] in
             self?.handleWorkspacePresentationInterrupted()
@@ -785,6 +800,44 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         requestWorkspaceDirectory(frontmostContext: frontmostContext)
+    }
+
+    private func addCustomWorkspaceApp() {
+        guard let onRequestCustomApplication else { return }
+        onRequestCustomApplication { [weak self] applicationURL in
+            guard let self else { return }
+            guard
+                let applicationURL,
+                let app = CustomWorkspaceApp.make(fromApplicationURL: applicationURL)
+            else {
+                return
+            }
+            let updated = CustomWorkspaceAppList.inserting(
+                app,
+                into: WorkspacePreferences.customApps
+            )
+            WorkspacePreferences.customApps = updated
+            self.rootView.workspaceView.reloadCustomAppsFromPreferences()
+            self.workspaceTouchBarController.reloadCustomAppsFromPreferences()
+        }
+    }
+
+    private func openCustomWorkspaceApp(_ app: CustomWorkspaceApp) {
+        do {
+            try CustomWorkspaceAppLauncher.open(app)
+        } catch {
+            // Soft failure: path / agent messaging surfaces stay usable.
+            rootView.workspaceView.showFailure(
+                error.localizedDescription,
+                context: currentWorkspaceContext,
+                agents: availableAgents
+            )
+            workspaceTouchBarController.showFailure(
+                error.localizedDescription,
+                context: currentWorkspaceContext,
+                agents: availableAgents
+            )
+        }
     }
 
     private func requestWorkspaceDirectory(

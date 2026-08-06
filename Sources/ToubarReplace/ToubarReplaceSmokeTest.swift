@@ -182,7 +182,8 @@ enum ToubarReplaceSmokeTest {
                 && WorkspaceTouchBarLayout.pathUnits == 4
                 && WorkspaceTouchBarLayout.agentsUnits == 3
                 && WorkspaceTouchBarLayout.customUnits == 3
-                && abs(WorkspaceTouchBarLayout.pathRegionScale - 0.9) < 0.001
+                && abs(WorkspaceTouchBarLayout.pathRegionScale - 1.0) < 0.001
+                && WorkspaceTouchBarLayout.minimumAgentsCustomWidth == 280
                 && WorkspaceTouchBarLayout.minimumContentWidth == 400
                 && WorkspaceTouchBarLayout.designReferenceBarWidth == 1_010
                 && WorkspaceTouchBarLayout.maximumContentWidth == 1_010
@@ -262,10 +263,10 @@ enum ToubarReplaceSmokeTest {
                         + WorkspaceTouchBarStyle.canvasInset * 2
                         - WorkspaceTouchBarLayout.designReferenceBarWidth
                 ) < 2,
-            "full bar strip: switcher outside; path 4/10×0.9; agents|custom share rest",
+            "full bar strip: switcher outside; path 4/10 base; agents|custom share rest",
             failures: &failures
         )
-        // Scaled fixed path zone: short path preferred width must not shrink the zone.
+        // Short path preferred width must not shrink the base 4/10 zone.
         let fixedGridStrip = WorkspaceTouchBarLayout.stripFrames(
             in: NSRect(
                 x: 0,
@@ -279,7 +280,59 @@ enum ToubarReplaceSmokeTest {
             abs(fixedGridStrip.path.width - strip.path.width) < 1
                 && abs(fixedGridStrip.agents.width - strip.agents.width) < 1
                 && abs(fixedGridStrip.custom.width - strip.custom.width) < 1,
-            "path zone width is fixed (scaled 4/10); plate hug must not move dividers",
+            "short path preferred must not shrink the base 4/10 zone",
+            failures: &failures
+        )
+        // Long folder name: path zone grows so the plate (and title) can fit.
+        let longNamePreferred: CGFloat = 460
+        let expandedStrip = WorkspaceTouchBarLayout.stripFrames(
+            in: NSRect(
+                x: 0,
+                y: 0,
+                width: WorkspaceTouchBarLayout.designReferenceBarWidth,
+                height: 30
+            ),
+            pathPreferredWidth: longNamePreferred
+        )
+        let expandedUsable = expandedStrip.tray.width
+            - WorkspaceTouchBarLayout.trayTrailingSafeInset
+        let expectedExpandedPath = min(
+            floor(
+                longNamePreferred
+                    + WorkspaceTouchBarLayout.zoneContentInset * 2
+            ),
+            floor(
+                expandedUsable
+                    - WorkspaceTouchBarLayout.minimumAgentsCustomWidth
+            ),
+            expandedUsable
+        )
+        expect(
+            expandedStrip.path.width > strip.path.width + 1
+                && abs(expandedStrip.path.width - expectedExpandedPath) < 1
+                && abs(
+                    expandedStrip.agents.width - expandedStrip.custom.width
+                ) <= 1
+                && expandedStrip.agents.width
+                    + expandedStrip.custom.width
+                    + 0.5
+                    >= WorkspaceTouchBarLayout.minimumAgentsCustomWidth,
+            "long path preferred must grow path zone and keep agents|custom floor",
+            failures: &failures
+        )
+        let pathPillProbe = WorkspaceTouchBarPathView(
+            frame: NSRect(x: 0, y: 0, width: 240, height: 30)
+        )
+        pathPillProbe.display(
+            image: nil,
+            title: "VeryLongWorkspaceFolderNameForDisplay",
+            toolTip: nil,
+            enabled: true
+        )
+        let measuredPill = pathPillProbe.preferredPillWidth
+        expect(
+            measuredPill > 200,
+            "path preferredPillWidth must track long folder title width",
             failures: &failures
         )
         let pathControl = WorkspaceTouchBarPathView(
@@ -383,7 +436,7 @@ enum ToubarReplaceSmokeTest {
         )
         expect(
             abs(fullStrip.path.width - expectedFullPath) < 1,
-            "path region must be 4/10 of usable tray scaled by pathRegionScale",
+            "path region base must be 4/10 of usable tray × pathRegionScale",
             failures: &failures
         )
         expect(

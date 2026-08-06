@@ -52,16 +52,22 @@ enum WorkspaceTouchBarLayout {
     static let switcherContentGap: CGFloat = 10
 
     /// Design grid on the tray: Path 4/10 | Agents 3/10 | Custom 3/10.
-    /// Path *zone* is further scaled by ``pathRegionScale``; freed width goes to
-    /// agents|custom. Path *plate* hugs title and is centered in the path zone.
+    /// Path *zone* uses ``pathRegionScale`` of the unit share as its **base**
+    /// width; when the path plate needs more room for a long folder name, the
+    /// zone may grow (agents|custom share the remainder) up to
+    /// ``minimumAgentsCustomWidth`` floor. Path *plate* still hugs title and
+    /// is centered in the path zone.
     static let totalUnits = 10
     static let pathUnits = 4
     static let agentsUnits = 3
     static let customUnits = 3
-    /// Path zone is 10% narrower than the unit share (4/10 × 0.9).
-    static let pathRegionScale: CGFloat = 0.9
+    /// Base path zone as a fraction of the 4/10 unit share (1.0 = full design).
+    static let pathRegionScale: CGFloat = 1.0
     /// Soft floor for the path plate region (includes zone insets).
     static let minimumPathRegionWidth: CGFloat = 120
+    /// When a long folder name expands the path zone, agents|custom keep at
+    /// least this combined width so icon slots stay usable.
+    static let minimumAgentsCustomWidth: CGFloat = 280
 
     /// Hairline between zones on the continuous tray.
     static let zoneDividerWidth: CGFloat = 1
@@ -101,23 +107,33 @@ enum WorkspaceTouchBarLayout {
         )
     }
 
-    /// Path *zone* width: design 4/10 of the usable tray, then × ``pathRegionScale``.
-    /// `pathPreferredWidth` is retained for API compatibility; plate hug + center
-    /// are applied by the content view inside the zone.
+    /// Path *zone* width: design 4/10 of the usable tray × ``pathRegionScale``,
+    /// then grow if `pathPreferredWidth` (plate hug) needs more room so the
+    /// folder name is not middle-truncated. Cap expansion so agents|custom
+    /// retain ``minimumAgentsCustomWidth``.
     static func pathRegionWidth(
         trayWidth: CGFloat,
         pathPreferredWidth: CGFloat = 0
     ) -> CGFloat {
-        _ = pathPreferredWidth
         guard trayWidth > 0 else { return 0 }
         let unitShare = floor(
             trayWidth * CGFloat(pathUnits) / CGFloat(totalUnits)
         )
-        return max(floor(unitShare * pathRegionScale), 0)
+        let baseWidth = max(floor(unitShare * pathRegionScale), 0)
+        // Plate is laid out inside zoneContentRect; zone must include insets.
+        let preferredZone = pathPreferredWidth > 0
+            ? ceil(pathPreferredWidth) + zoneContentInset * 2
+            : 0
+        let maxPathWidth = max(
+            trayWidth - minimumAgentsCustomWidth,
+            baseWidth
+        )
+        let desired = max(baseWidth, preferredZone, minimumPathRegionWidth)
+        return min(floor(desired), floor(maxPathWidth), trayWidth)
     }
 
-    /// Split tray into path | agents | custom. Path uses scaled 4/10; remainder
-    /// after path is split 1:1 for agents|custom (same weight as design 3|3).
+    /// Split tray into path | agents | custom. Path uses base 4/10 (may grow
+    /// for long titles); remainder after path is split 1:1 for agents|custom.
     static func trayZoneFrames(
         tray: NSRect,
         pathPreferredWidth: CGFloat = 0
@@ -878,11 +894,22 @@ final class WorkspaceTouchBarPathView: NSView {
     var onActivate: (() -> Void)?
 
     /// Content-hugging width for the path pill (before min/max clamp in layout).
+    /// Parent uses this to size the plate and optionally grow the path zone so
+    /// long folder names are not truncated by a fixed 4/10 grid.
     var preferredPillWidth: CGFloat {
         let title = titleLabel.stringValue as NSString
         let font = titleLabel.font ?? WorkspaceTouchBarStyle.titleFont
+        // boundingRect matches AppKit drawing more closely than size(with:)
+        // for CJK / semibold system fonts on Touch Bar.
         let textWidth = ceil(
-            title.size(withAttributes: [.font: font]).width
+            title.boundingRect(
+                with: NSSize(
+                    width: CGFloat.greatestFiniteMagnitude,
+                    height: 40
+                ),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font]
+            ).width
         )
         let iconPart: CGFloat
         if showsIcon {
@@ -894,8 +921,9 @@ final class WorkspaceTouchBarPathView: NSView {
         let raw = WorkspaceTouchBarStyle.horizontalPadding * 2
             + iconPart
             + textWidth
-        // Keep a touch of padding so short titles don't feel cramped.
-        return max(raw + 2, 120)
+        // Extra safety so the label frame is never 1–2pt short of the glyph run
+        // (which would force byTruncatingMiddle even when the zone can grow).
+        return max(raw + 6, 120)
     }
 
     override init(frame frameRect: NSRect) {
@@ -914,7 +942,9 @@ final class WorkspaceTouchBarPathView: NSView {
         titleLabel.font = WorkspaceTouchBarStyle.titleFont
         titleLabel.textColor = WorkspaceTouchBarStyle.primaryTextColor
         titleLabel.alignment = .left
+        titleLabel.maximumNumberOfLines = 1
         titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.cell?.truncatesLastVisibleLine = true
         addSubview(titleLabel)
 
         actionButton.target = self

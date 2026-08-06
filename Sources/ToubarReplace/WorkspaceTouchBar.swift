@@ -386,12 +386,53 @@ enum WorkspaceTouchBarStyle {
         )
     }
 
+    /// Bundled brand mark used when the agent has no local app icon.
+    /// Source files live under `Resources/AgentIcons/<AgentID.rawValue>.png`.
+    /// SPM `.process` flattens them to the module bundle root; the packaged
+    /// `.app` also keeps a copy at `Contents/Resources/AgentIcons/`.
+    @MainActor
+    static func agentDefaultIcon(for id: AgentID) -> NSImage? {
+        let resourceName = id.rawValue
+        let candidates: [URL?] = [
+            Bundle.module.url(
+                forResource: resourceName,
+                withExtension: "png"
+            ),
+            Bundle.module.url(
+                forResource: resourceName,
+                withExtension: "png",
+                subdirectory: "AgentIcons"
+            ),
+            Bundle.main.url(
+                forResource: resourceName,
+                withExtension: "png",
+                subdirectory: "AgentIcons"
+            ),
+            Bundle.main.resourceURL?
+                .appendingPathComponent("AgentIcons", isDirectory: true)
+                .appendingPathComponent("\(resourceName).png"),
+        ]
+        for candidate in candidates {
+            guard let url = candidate,
+                FileManager.default.fileExists(atPath: url.path),
+                let image = NSImage(contentsOf: url)
+            else { continue }
+            image.isTemplate = false
+            return image
+        }
+        return nil
+    }
+
     @MainActor
     static func agentIcon(for agent: AvailableAgent) -> NSImage? {
         let sourceImage: NSImage?
-        if let applicationURL = agent.iconApplicationURL {
+        if let applicationURL = agent.iconApplicationURL,
+            FileManager.default.fileExists(atPath: applicationURL.path)
+        {
             sourceImage = NSWorkspace.shared.icon(forFile: applicationURL.path)
             sourceImage?.isTemplate = false
+        } else if let defaultIcon = agentDefaultIcon(for: agent.id) {
+            sourceImage = defaultIcon
         } else {
             sourceImage = agentSymbol(for: agent.id)
         }

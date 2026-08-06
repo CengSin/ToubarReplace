@@ -21,7 +21,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "ToubarReplace",
-            dependencies: ["TouchBarPrivateAPI"]
+            dependencies: ["TouchBarPrivateAPI"],
+            resources: [
+                .process("Resources")
+            ]
         ),
     ],
     swiftLanguageModes: [.v6]

@@ -356,6 +356,29 @@ enum ToubarReplaceSmokeTest {
             "Workspace path region must expose a real button action",
             failures: &failures
         )
+        for agentID in AgentID.allCases {
+            let defaultIcon = WorkspaceTouchBarStyle.agentDefaultIcon(for: agentID)
+            expect(
+                defaultIcon != nil,
+                "Agent \(agentID.rawValue) must ship a bundled default icon",
+                failures: &failures
+            )
+            let agentWithoutAppIcon = AvailableAgent(
+                id: agentID,
+                displayName: agentID.rawValue,
+                iconApplicationURL: nil,
+                launchStrategy: .process(
+                    executableURL: URL(fileURLWithPath: "/usr/bin/true"),
+                    leadingArguments: []
+                )
+            )
+            let resolved = WorkspaceTouchBarStyle.agentIcon(for: agentWithoutAppIcon)
+            expect(
+                resolved != nil && resolved?.isTemplate == false,
+                "Agent \(agentID.rawValue) without app icon must resolve a non-template default",
+                failures: &failures
+            )
+        }
         let sampleAgent = AvailableAgent(
             id: .codex,
             displayName: "Codex",

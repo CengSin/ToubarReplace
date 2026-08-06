@@ -25,6 +25,17 @@ cp "Packaging/Info.plist" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
   "$APP_DIR/Contents/Info.plist"
 cp "Resources/AppIcon-source.png" "$APP_DIR/Contents/Resources/AppIcon.png"
+# Bundled Agent brand marks (fallback when no local .app icon).
+if [[ -d "Sources/ToubarReplace/Resources/AgentIcons" ]]; then
+  mkdir -p "$APP_DIR/Contents/Resources/AgentIcons"
+  cp Sources/ToubarReplace/Resources/AgentIcons/*.png \
+    "$APP_DIR/Contents/Resources/AgentIcons/"
+fi
+# SPM resource bundle (Bundle.module) when present next to the release binary.
+SPM_BUNDLE="$(dirname "$BINARY_PATH")/ToubarReplace_ToubarReplace.bundle"
+if [[ -d "$SPM_BUNDLE" ]]; then
+  cp -R "$SPM_BUNDLE" "$APP_DIR/Contents/MacOS/"
+fi
 chmod +x "$APP_DIR/Contents/MacOS/ToubarReplace"
 
 /usr/bin/codesign --force --deep --sign - "$APP_DIR" >/dev/null

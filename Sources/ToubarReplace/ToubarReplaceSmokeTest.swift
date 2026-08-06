@@ -303,6 +303,55 @@ enum ToubarReplaceSmokeTest {
             "Workspace path region must expose a real button action",
             failures: &failures
         )
+        let sampleAgent = AvailableAgent(
+            id: .codex,
+            displayName: "Codex",
+            iconApplicationURL: nil,
+            launchStrategy: .process(
+                executableURL: URL(fileURLWithPath: "/usr/bin/true"),
+                leadingArguments: []
+            )
+        )
+        let agentRow = AgentIconRowView(
+            frame: NSRect(x: 0, y: 0, width: 200, height: 30)
+        )
+        var agentActivatedName: String?
+        agentRow.onAgentActivated = { agent in
+            agentActivatedName = agent.displayName
+        }
+        agentRow.display(agents: [sampleAgent])
+        agentRow.setEnabled(true)
+        agentRow.layoutSubtreeIfNeeded()
+        let agentButtons = agentRow.subviews.compactMap {
+            $0 as? WorkspaceChromeButton
+        }
+        expect(
+            agentButtons.count == 1,
+            "Workspace agent region must use WorkspaceChromeButton slots",
+            failures: &failures
+        )
+        agentButtons.first?.performClick(nil)
+        expect(
+            agentActivatedName == "Codex",
+            "Workspace agent region must expose a real button action",
+            failures: &failures
+        )
+        let chromeProbe = WorkspaceChromeButton(
+            frame: NSRect(x: 0, y: 0, width: 44, height: 28)
+        )
+        chromeProbe.highlight(true)
+        expect(
+            chromeProbe.layer?.borderWidth == 1
+                && chromeProbe.layer?.backgroundColor != nil,
+            "Workspace chrome button must show pressed chrome while highlighted",
+            failures: &failures
+        )
+        chromeProbe.highlight(false)
+        expect(
+            chromeProbe.layer?.borderWidth == 0,
+            "Workspace chrome button must clear pressed chrome after release",
+            failures: &failures
+        )
         expect(
             WorkspaceTouchBarStyle.failureSymbolName == nil,
             "undisplayed directories must not use a warning symbol",

@@ -307,6 +307,9 @@ enum WorkspaceTouchBarStyle {
         blue: 50 / 255,
         alpha: 1
     )
+    /// Pressed chrome for tray slots (agent / custom / path / switcher).
+    static let itemHighlightedBackground = NSColor.white.withAlphaComponent(0.22)
+    static let itemHighlightBorderColor = NSColor.white.withAlphaComponent(0.32)
     static let dividerColor = NSColor.white.withAlphaComponent(0.19)
     static let primaryTextColor = NSColor.white
     static let secondaryTextColor = NSColor.white.withAlphaComponent(0.72)
@@ -421,11 +424,151 @@ enum WorkspaceTouchBarStyle {
         icon.isTemplate = sourceImage.isTemplate
         return icon
     }
+
+    @MainActor
+    static func applyItemChrome(
+        to layer: CALayer?,
+        highlighted: Bool,
+        enabled: Bool = true
+    ) {
+        let showHighlight = highlighted && enabled
+        layer?.backgroundColor = showHighlight
+            ? itemHighlightedBackground.cgColor
+            : itemBackground.cgColor
+        layer?.borderWidth = showHighlight ? 1 : 0
+        layer?.borderColor = itemHighlightBorderColor.cgColor
+        layer?.cornerRadius = cornerRadius
+    }
+}
+
+/// Borderless tray control with reliable Touch Bar target/action and press chrome.
+/// Custom-styled `NSButton`s otherwise show no highlight when `isBordered` is false.
+@MainActor
+final class WorkspaceChromeButton: NSButton {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureDefaults()
+    }
+
+    convenience init() {
+        self.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func configureDefaults() {
+        isBordered = false
+        bezelStyle = .rounded
+        setButtonType(.momentaryChange)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        font = WorkspaceTouchBarStyle.secondaryFont
+        contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
+        WorkspaceTouchBarStyle.applyItemChrome(
+            to: layer,
+            highlighted: false,
+            enabled: true
+        )
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func layout() {
+        super.layout()
+        let scale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        layer?.contentsScale = scale
+    }
+
+    override var isEnabled: Bool {
+        didSet {
+            alphaValue = isEnabled ? 1 : 0.72
+            refreshChrome()
+        }
+    }
+
+    override var isHighlighted: Bool {
+        didSet { refreshChrome() }
+    }
+
+    override func highlight(_ flag: Bool) {
+        super.highlight(flag)
+        refreshChrome()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // Super tracks press/release and drives highlight + action. Force chrome
+        // around the call so borderless layer buttons visibly depress on TB/desktop.
+        refreshChrome()
+        super.mouseDown(with: event)
+        refreshChrome()
+    }
+
+    func refreshChrome() {
+        WorkspaceTouchBarStyle.applyItemChrome(
+            to: layer,
+            highlighted: isHighlighted,
+            enabled: isEnabled
+        )
+    }
+
+    func configureTitleChrome(title: String, toolTip: String) {
+        self.title = title
+        self.toolTip = toolTip
+        image = nil
+        imagePosition = .noImage
+        setAccessibilityLabel(title.isEmpty ? "添加自定义 App" : title)
+        refreshChrome()
+    }
+}
+
+/// Full-slot hit target that only reports highlight (chrome lives on the parent).
+@MainActor
+final class WorkspaceTransparentHitButton: NSButton {
+    var onHighlightChange: ((Bool) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isBordered = false
+        setButtonType(.momentaryChange)
+        title = ""
+        focusRingType = .none
+    }
+
+    convenience init() {
+        self.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override var isHighlighted: Bool {
+        didSet { onHighlightChange?(isHighlighted && isEnabled) }
+    }
+
+    override func highlight(_ flag: Bool) {
+        super.highlight(flag)
+        onHighlightChange?(flag && isEnabled)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onHighlightChange?(isEnabled)
+        super.mouseDown(with: event)
+        onHighlightChange?(false)
+    }
 }
 
 @MainActor
 final class WorkspaceTouchBarContentView: NSView {
-    private let switcherButton = NSButton()
+    private let switcherButton = WorkspaceChromeButton()
     private let trayView = NSView()
     private let pathView: NSView
     private let agentsView: NSView
@@ -454,14 +597,8 @@ final class WorkspaceTouchBarContentView: NSView {
             accessibilityDescription: "返回 Touch Bar 镜像"
         )
         switcherButton.contentTintColor = .white
-        switcherButton.isBordered = false
-        switcherButton.bezelStyle = .texturedRounded
         switcherButton.imageScaling = .scaleProportionallyDown
         switcherButton.imagePosition = .imageOnly
-        switcherButton.wantsLayer = true
-        switcherButton.layer?.backgroundColor =
-            WorkspaceTouchBarStyle.itemBackground.cgColor
-        switcherButton.layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
         switcherButton.target = self
         switcherButton.action = #selector(toggleWorkspace)
         switcherButton.toolTip = "点击返回 Touch Bar 镜像"
@@ -610,9 +747,9 @@ final class WorkspaceTouchBarContentView: NSView {
 /// Custom-apps zone: empty "自定义app" button, or icons + add — equal slots.
 @MainActor
 final class WorkspaceCustomAppsView: NSView {
-    private let emptyButton = NSButton()
-    private let addButton = NSButton()
-    private var iconButtons: [NSButton] = []
+    private let emptyButton = WorkspaceChromeButton()
+    private let addButton = WorkspaceChromeButton()
+    private var iconButtons: [WorkspaceChromeButton] = []
     private var apps: [CustomWorkspaceApp] = []
     private var slotViews: [NSView] = []
 
@@ -623,8 +760,7 @@ final class WorkspaceCustomAppsView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
 
-        configureChromeButton(
-            emptyButton,
+        emptyButton.configureTitleChrome(
             title: "自定义app",
             toolTip: "添加常用应用（最多 3 个，超出按先进先出替换）"
         )
@@ -632,8 +768,7 @@ final class WorkspaceCustomAppsView: NSView {
         emptyButton.action = #selector(addCustomApp)
         addSubview(emptyButton)
 
-        configureChromeButton(
-            addButton,
+        addButton.configureTitleChrome(
             title: "",
             toolTip: "添加常用应用（最多 3 个，超出按先进先出替换）"
         )
@@ -706,35 +841,15 @@ final class WorkspaceCustomAppsView: NSView {
         layoutEqualSlots(in: bounds)
     }
 
-    private func configureChromeButton(
-        _ button: NSButton,
-        title: String,
-        toolTip: String
-    ) {
-        button.title = title
-        button.isBordered = false
-        button.bezelStyle = .rounded
-        button.wantsLayer = true
-        button.layer?.backgroundColor =
-            WorkspaceTouchBarStyle.itemBackground.cgColor
-        button.layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
-        button.font = WorkspaceTouchBarStyle.secondaryFont
-        button.contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
-        button.toolTip = toolTip
-        button.setAccessibilityLabel(title.isEmpty ? "添加自定义 App" : title)
-    }
-
-    private func makeAppButton(app: CustomWorkspaceApp, index: Int) -> NSButton {
-        let button = NSButton()
-        button.isBordered = false
-        button.bezelStyle = .rounded
-        button.wantsLayer = true
-        button.layer?.backgroundColor =
-            WorkspaceTouchBarStyle.itemBackground.cgColor
-        button.layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
+    private func makeAppButton(
+        app: CustomWorkspaceApp,
+        index: Int
+    ) -> WorkspaceChromeButton {
+        let button = WorkspaceChromeButton()
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.image = WorkspaceTouchBarStyle.customAppIcon(for: app)
+        button.contentTintColor = nil
         button.toolTip = "打开 \(app.displayName)"
         button.setAccessibilityLabel(app.displayName)
         button.tag = index
@@ -757,7 +872,7 @@ final class WorkspaceCustomAppsView: NSView {
 final class WorkspaceTouchBarPathView: NSView {
     private let imageView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
-    private let actionButton = NSButton()
+    private let actionButton = WorkspaceTransparentHitButton()
     private var isInteractionEnabled = true
     private var showsIcon = true
     var onActivate: (() -> Void)?
@@ -786,8 +901,12 @@ final class WorkspaceTouchBarPathView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = WorkspaceTouchBarStyle.itemBackground.cgColor
-        layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
+        layer?.masksToBounds = true
+        WorkspaceTouchBarStyle.applyItemChrome(
+            to: layer,
+            highlighted: false,
+            enabled: true
+        )
         imageView.imageScaling = .scaleProportionallyDown
         imageView.contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
         imageView.wantsLayer = true
@@ -798,12 +917,12 @@ final class WorkspaceTouchBarPathView: NSView {
         titleLabel.lineBreakMode = .byTruncatingMiddle
         addSubview(titleLabel)
 
-        actionButton.title = ""
-        actionButton.isBordered = false
-        actionButton.setButtonType(.momentaryChange)
         actionButton.target = self
         actionButton.action = #selector(activatePath)
         actionButton.toolTip = nil
+        actionButton.onHighlightChange = { [weak self] highlighted in
+            self?.applyPathChrome(highlighted: highlighted)
+        }
         addSubview(actionButton)
     }
 
@@ -856,6 +975,14 @@ final class WorkspaceTouchBarPathView: NSView {
         onActivate?()
     }
 
+    private func applyPathChrome(highlighted: Bool) {
+        WorkspaceTouchBarStyle.applyItemChrome(
+            to: layer,
+            highlighted: highlighted,
+            enabled: isInteractionEnabled
+        )
+    }
+
     func display(
         image: NSImage?,
         title: String,
@@ -871,6 +998,7 @@ final class WorkspaceTouchBarPathView: NSView {
         alphaValue = enabled ? 1 : 0.42
         showsIcon = image != nil
         imageView.isHidden = image == nil
+        applyPathChrome(highlighted: false)
         needsLayout = true
         setAccessibilityElement(true)
         setAccessibilityRole(.button)

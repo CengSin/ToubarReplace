@@ -209,99 +209,12 @@ final class WorkspaceSwitcherWindowController: NSWindowController {
     }
 }
 
-@MainActor
-final class WorkspaceAgentIconView: NSView {
-    private let imageView = NSImageView()
-    private var agent: AvailableAgent?
-    private var isInteractionEnabled = true
-
-    var onActivate: ((AvailableAgent) -> Void)?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = WorkspaceTouchBarStyle.itemBackground.cgColor
-        layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
-        imageView.imageScaling = .scaleProportionallyDown
-        imageView.contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
-        imageView.wantsLayer = true
-        addSubview(imageView)
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-        true
-    }
-
-    override func layout() {
-        super.layout()
-        let contentsScale = window?.backingScaleFactor
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 2
-        layer?.contentsScale = contentsScale
-        imageView.layer?.contentsScale = contentsScale
-        let iconSize = WorkspaceTouchBarStyle.agentIconSize
-        imageView.frame = NSRect(
-            x: floor(bounds.midX - iconSize / 2),
-            y: floor(bounds.midY - iconSize / 2),
-            width: iconSize,
-            height: iconSize
-        )
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard isInteractionEnabled, let agent else { return }
-        updateChrome(emphasized: true)
-        imageView.alphaValue = 1
-        super.mouseDown(with: event)
-        updateChrome(emphasized: false)
-        imageView.alphaValue = 0.96
-        onActivate?(agent)
-    }
-
-    override func accessibilityPerformPress() -> Bool {
-        guard isInteractionEnabled, let agent else { return false }
-        onActivate?(agent)
-        return true
-    }
-
-    func display(_ agent: AvailableAgent) {
-        self.agent = agent
-        let icon = WorkspaceTouchBarStyle.agentIcon(for: agent)
-        imageView.image = icon
-        imageView.contentTintColor = icon?.isTemplate == true
-            ? WorkspaceTouchBarStyle.primaryTextColor
-            : nil
-        toolTip = "用 \(agent.displayName) 打开当前项目"
-        setAccessibilityLabel(agent.displayName)
-        updateChrome(emphasized: false)
-    }
-
-    func setEnabled(_ enabled: Bool) {
-        isInteractionEnabled = enabled
-        imageView.alphaValue = enabled ? 0.96 : 0.45
-        alphaValue = enabled ? 1 : 0.72
-    }
-
-    private func updateChrome(emphasized: Bool) {
-        layer?.backgroundColor = emphasized
-            ? NSColor.white.withAlphaComponent(0.22).cgColor
-            : WorkspaceTouchBarStyle.itemBackground.cgColor
-        layer?.borderWidth = emphasized ? 1 : 0
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
-    }
-}
-
+/// Agent zone: equal icon slots via real `NSButton`s (same pattern as custom apps).
 @MainActor
 final class AgentIconRowView: NSView {
     private let emptyLabel = NSTextField(labelWithString: "未发现 Agent")
-    private var iconViews: [WorkspaceAgentIconView] = []
+    private var iconButtons: [WorkspaceChromeButton] = []
+    private var agents: [AvailableAgent] = []
 
     var onAgentActivated: ((AvailableAgent) -> Void)?
 
@@ -331,35 +244,57 @@ final class AgentIconRowView: NSView {
     override func layout() {
         super.layout()
         emptyLabel.frame = bounds.insetBy(dx: 4, dy: 1)
-        guard !iconViews.isEmpty else { return }
+        guard !iconButtons.isEmpty else { return }
         let slots = WorkspaceTouchBarLayout.slotFrames(
             in: bounds,
-            slotCount: iconViews.count
+            slotCount: iconButtons.count
         )
-        for (index, view) in iconViews.enumerated() where index < slots.count {
-            view.frame = slots[index]
+        for (index, button) in iconButtons.enumerated() where index < slots.count {
+            button.frame = slots[index]
         }
     }
 
     func display(agents: [AvailableAgent]) {
-        iconViews.forEach { $0.removeFromSuperview() }
-        iconViews.removeAll()
+        self.agents = agents
+        iconButtons.forEach { $0.removeFromSuperview() }
+        iconButtons.removeAll()
 
         emptyLabel.isHidden = !agents.isEmpty
-        for agent in agents {
-            let iconView = WorkspaceAgentIconView(frame: .zero)
-            iconView.display(agent)
-            iconView.onActivate = { [weak self] selectedAgent in
-                self?.onAgentActivated?(selectedAgent)
-            }
-            addSubview(iconView)
-            iconViews.append(iconView)
+        for (index, agent) in agents.enumerated() {
+            let button = makeAgentButton(agent: agent, index: index)
+            addSubview(button)
+            iconButtons.append(button)
         }
         needsLayout = true
     }
 
     func setEnabled(_ enabled: Bool) {
-        iconViews.forEach { $0.setEnabled(enabled) }
+        iconButtons.forEach { $0.isEnabled = enabled }
+    }
+
+    private func makeAgentButton(
+        agent: AvailableAgent,
+        index: Int
+    ) -> WorkspaceChromeButton {
+        let button = WorkspaceChromeButton()
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        let icon = WorkspaceTouchBarStyle.agentIcon(for: agent)
+        button.image = icon
+        button.contentTintColor = icon?.isTemplate == true
+            ? WorkspaceTouchBarStyle.primaryTextColor
+            : nil
+        button.toolTip = "用 \(agent.displayName) 打开当前项目"
+        button.setAccessibilityLabel(agent.displayName)
+        button.tag = index
+        button.target = self
+        button.action = #selector(activateAgent(_:))
+        return button
+    }
+
+    @objc private func activateAgent(_ sender: NSButton) {
+        guard agents.indices.contains(sender.tag) else { return }
+        onAgentActivated?(agents[sender.tag])
     }
 }
 

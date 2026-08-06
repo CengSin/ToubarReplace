@@ -173,6 +173,148 @@ enum WorkspacePreferences {
             )
         }
     }
+
+    private static let customAppsKey = "ToubarReplace.workspace.customApps"
+
+    /// Ordered oldest → newest. At most ``CustomWorkspaceAppList.maxCount``.
+    static var customApps: [CustomWorkspaceApp] {
+        get {
+            guard
+                let data = UserDefaults.standard.data(forKey: customAppsKey),
+                let decoded = try? JSONDecoder().decode(
+                    [CustomWorkspaceApp].self,
+                    from: data
+                )
+            else {
+                return []
+            }
+            return CustomWorkspaceAppList.normalized(decoded)
+        }
+        set {
+            let normalized = CustomWorkspaceAppList.normalized(newValue)
+            if let data = try? JSONEncoder().encode(normalized) {
+                UserDefaults.standard.set(data, forKey: customAppsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: customAppsKey)
+            }
+        }
+    }
+}
+
+/// User-pinned app for the Workspace custom zone (open only; no project path).
+struct CustomWorkspaceApp: Codable, Equatable {
+    /// Bundle identifier when known; used for dedupe and relaunch fallback.
+    var bundleIdentifier: String?
+    /// Absolute path to the `.app` bundle when selected.
+    var applicationPath: String
+    /// Display name captured at add time.
+    var displayName: String
+
+    var applicationURL: URL {
+        URL(fileURLWithPath: applicationPath, isDirectory: true)
+    }
+
+    static func make(fromApplicationURL url: URL) -> CustomWorkspaceApp? {
+        let standardized = url.standardizedFileURL
+        guard standardized.pathExtension == "app" else { return nil }
+        let bundle = Bundle(url: standardized)
+        let bundleIdentifier = bundle?.bundleIdentifier
+        let displayName =
+            bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? standardized.deletingPathExtension().lastPathComponent
+        return CustomWorkspaceApp(
+            bundleIdentifier: bundleIdentifier,
+            applicationPath: standardized.path,
+            displayName: displayName
+        )
+    }
+}
+
+enum CustomWorkspaceAppList {
+    static let maxCount = 3
+
+    /// Oldest first; drops from the front when over capacity (FIFO).
+    static func normalized(_ apps: [CustomWorkspaceApp]) -> [CustomWorkspaceApp] {
+        var result: [CustomWorkspaceApp] = []
+        for app in apps {
+            result.removeAll { Self.isSameApp($0, app) }
+            result.append(app)
+            while result.count > maxCount {
+                result.removeFirst()
+            }
+        }
+        return result
+    }
+
+    /// Insert or move `app` to newest; evict oldest when over ``maxCount``.
+    static func inserting(
+        _ app: CustomWorkspaceApp,
+        into apps: [CustomWorkspaceApp]
+    ) -> [CustomWorkspaceApp] {
+        normalized(apps + [app])
+    }
+
+    static func isSameApp(_ lhs: CustomWorkspaceApp, _ rhs: CustomWorkspaceApp)
+        -> Bool
+    {
+        if let leftID = lhs.bundleIdentifier,
+            let rightID = rhs.bundleIdentifier,
+            !leftID.isEmpty,
+            leftID == rightID
+        {
+            return true
+        }
+        return lhs.applicationPath == rhs.applicationPath
+    }
+}
+
+enum CustomWorkspaceAppLauncher {
+    @MainActor
+    static func open(
+        _ app: CustomWorkspaceApp,
+        workspace: NSWorkspace = .shared,
+        fileManager: FileManager = .default
+    ) throws {
+        if fileManager.fileExists(atPath: app.applicationPath) {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            workspace.openApplication(
+                at: app.applicationURL,
+                configuration: configuration
+            ) { _, error in
+                _ = error
+            }
+            return
+        }
+        if let bundleIdentifier = app.bundleIdentifier,
+            let url = workspace.urlForApplication(
+                withBundleIdentifier: bundleIdentifier
+            )
+        {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            workspace.openApplication(
+                at: url,
+                configuration: configuration
+            ) { _, error in
+                _ = error
+            }
+            return
+        }
+        throw CustomWorkspaceAppLaunchError.applicationMissing(app.displayName)
+    }
+}
+
+enum CustomWorkspaceAppLaunchError: LocalizedError {
+    case applicationMissing(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .applicationMissing(name):
+            return "找不到应用「\(name)」"
+        }
+    }
 }
 
 struct FrontmostAppContext {

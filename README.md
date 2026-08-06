@@ -29,7 +29,7 @@ Scripts/run-regression.sh
 
 ## Workspace Bar
 
-点击独立浮窗中的网格按钮会在物理 Touch Bar 上打开 Workspace，再次点击同一按钮即可恢复系统 Touch Bar；设置中也可以把按钮附着到镜像左侧或右侧。Workspace 内不再放置额外的关闭或返回按钮，所有模式切换都经过这个切换按钮。展开期间镜像捕获流继续运行，因此桌面窗口会镜像这套真实可触摸的 Workspace 内容，并保持 100% 不透明度。
+点击独立浮窗中的网格按钮会在物理 Touch Bar 上打开 Workspace，再次点击同一按钮即可恢复系统 Touch Bar；设置中也可以把按钮附着到镜像左侧或右侧。物理 Workspace 条最左侧另有返回控件（在 10 格网格之外），与浮窗/附着切换按钮作用相同。展开期间镜像捕获流继续运行，因此桌面窗口会镜像这套真实可触摸的 Workspace 内容，并保持 100% 不透明度。
 
 如果打开 Workspace 时 Finder 正在前台，应用会通过 Automation 权限优先读取并展示当前 Finder 窗口的目录；Workspace 已展开期间切换到 Finder，也会稍作等待后自动刷新，避免 Finder 窗口尚未准备完成时读到空路径。其他应用的文档路径解析仍需要 ToubarReplace 的辅助功能权限。触摸整个路径区域时，如果 Finder 正在前台会直接读取当前目录，否则打开系统目录选择器供用户选择。
 
@@ -40,7 +40,7 @@ Scripts/run-regression.sh
 - Claude Code：通过设置中选择的终端在项目目录中启动交互式 `claude`。当前支持已安装的 Otty 和 Terminal.app；Otty 使用 `otty-cli`，Terminal 适配器首次使用时 macOS 可能请求 Automation 权限。
 - Grok Build：发现 `grok` CLI（包含 `~/.grok/bin/grok`），并通过所选终端在项目目录中启动交互式 Grok Build TUI。
 
-物理 Touch Bar 的 Workspace 使用约 70% 宽度展示项目目录、30% 宽度展示 Agent。目录是无按钮底板的图标与路径信息栏，触摸整栏可重新获取目录；Agent 只显示一行系统图标，不显示文字方框或按钮底板，触摸对应图标即可启动。启动期间 Agent 会立即禁用，同一 Agent 和路径的一秒内重复事件也会被忽略。启动成功后默认等待约 0.5 秒返回系统镜像，可在设置中关闭自动返回。
+物理 Touch Bar 的 Workspace 按设计稿 v2：**单条 full-width item** 内左侧返回（网格外），右侧 continuous tray。tray 为 **Path（4/10×0.9）| Agents | Custom**（Path 区再缩 10%，多出宽度由后两区均分）；目录 plate 在 Path 区内按标题收窄并水平居中，Agent/自定义为等分槽位（自定义空态「自定义app」，最多 3 个 + 添加位，满员 FIFO）。点自定义图标仅打开 App。item 目标宽度由设置中的镜像像素宽换算为点，并**上限为 `1050` pt**（略低于 DFR 全宽约 `1085`，避免右侧自定义/`+` 被 Function Row 裁切；默认镜像 `2300` @2x 点宽会被 cap）；高度固定为 Touch Bar chrome（约 30pt）。启动 Agent 期间会立即禁用；成功后默认约 0.5 秒返回镜像，可在设置中关闭。
 
 如果“App 控制”或“快速操作”模式暂时没有可显示的上下文内容，镜像窗口会保留最后一张有效画面并显示非错误提示；切换到支持触控栏的 App 或启用快速操作后会自动恢复。显示流不可用、启动失败、Control Strip 布局为空，或者固定内容模式下 TouchBarServer 持续只返回黑帧时，镜像窗口仍会显示对应错误原因。
 
@@ -58,7 +58,7 @@ killall ControlStrip
 - 默认镜像刷新率为 30 FPS，可在 1–30 FPS 之间调整。显示流只在 Touch Bar 内容改变时交付新帧；限流期间会保留并补发最新画面，避免切换结束时停留在过渡帧。
 - 首次启动窗口为 `2300 × 70` 像素（Retina 屏幕上约 `1150 × 35` 点）。用户调整后的实际像素宽高会自动写入设置并在下次启动时恢复；画面按窗口大小等比缩放，不再强制套用某个机型的 Touch Bar 宽度。
 - 锁屏、屏幕休眠或系统休眠时会停止显示流；解锁、亮屏或唤醒后会自动重建。显示流启动后 5 秒没有返回任何状态会自动重连；系统返回的全黑帧持续至少 0.5 秒才会被判定为异常，且不会覆盖最后一张有效画面。
-- 桌面镜像窗口背景接收鼠标拖拽；独立切换浮窗可整块拖动并记忆位置。切换按钮只负责打开或关闭 Workspace。捕获到的镜像仍不做坐标映射或点击转发；路径、Agent 滑动和启动操作全部发生在物理 Touch Bar 上。
+- 桌面镜像窗口背景接收鼠标拖拽；独立切换浮窗可整块拖动并记忆位置。切换按钮只负责打开或关闭 Workspace。捕获到的镜像仍不做坐标映射或点击转发；路径、Agent 点按启动与自定义 App 打开全部发生在物理 Touch Bar 上。
 - Workspace 通过 Pock 同类的私有 `presentSystemModalTouchBar`/`dismissSystemModalTouchBar` 接口临时呈现自建 `NSTouchBar`。Workspace 使用全宽 `app` 模式，不保留右侧 Control Strip；退出、锁屏、睡眠或再次点击切换按钮时会 dismiss。只有系统模式仍是 Workspace 设置的 `app` 时才恢复进入前的 `PresentationModeGlobal`；若用户期间已在系统设置中切换模式，则保留用户的新选择，并把切换按钮同步回镜像状态。
 - `SLSDFRDisplayStreamCreate` 和 system-modal Touch Bar 都是私有接口，未来 macOS 更新可能改变或移除。应用会在运行时检查呈现 selector；不可用时保留普通镜像并显示错误，不执行未知调用。
 

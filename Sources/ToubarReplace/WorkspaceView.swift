@@ -219,6 +219,9 @@ final class WorkspaceAgentIconView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = WorkspaceTouchBarStyle.itemBackground.cgColor
+        layer?.cornerRadius = WorkspaceTouchBarStyle.cornerRadius
         imageView.imageScaling = .scaleProportionallyDown
         imageView.contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
         imageView.wantsLayer = true
@@ -254,8 +257,10 @@ final class WorkspaceAgentIconView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard isInteractionEnabled, let agent else { return }
-        imageView.alphaValue = 0.62
+        updateChrome(emphasized: true)
+        imageView.alphaValue = 1
         super.mouseDown(with: event)
+        updateChrome(emphasized: false)
         imageView.alphaValue = 0.96
         onActivate?(agent)
     }
@@ -275,17 +280,26 @@ final class WorkspaceAgentIconView: NSView {
             : nil
         toolTip = "用 \(agent.displayName) 打开当前项目"
         setAccessibilityLabel(agent.displayName)
+        updateChrome(emphasized: false)
     }
 
     func setEnabled(_ enabled: Bool) {
         isInteractionEnabled = enabled
         imageView.alphaValue = enabled ? 0.96 : 0.45
+        alphaValue = enabled ? 1 : 0.72
+    }
+
+    private func updateChrome(emphasized: Bool) {
+        layer?.backgroundColor = emphasized
+            ? NSColor.white.withAlphaComponent(0.22).cgColor
+            : WorkspaceTouchBarStyle.itemBackground.cgColor
+        layer?.borderWidth = emphasized ? 1 : 0
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.32).cgColor
     }
 }
 
 @MainActor
 final class AgentIconRowView: NSView {
-    private let stackView = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "未发现 Agent")
     private var iconViews: [WorkspaceAgentIconView] = []
 
@@ -293,24 +307,10 @@ final class AgentIconRowView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // Transparent so design-v2 continuous tray shows through.
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
         layer?.masksToBounds = true
-        let edgeMask = CAGradientLayer()
-        edgeMask.colors = [
-            NSColor.clear.cgColor,
-            NSColor.black.cgColor,
-            NSColor.black.cgColor,
-            NSColor.clear.cgColor,
-        ]
-        edgeMask.startPoint = CGPoint(x: 0, y: 0.5)
-        edgeMask.endPoint = CGPoint(x: 1, y: 0.5)
-        layer?.mask = edgeMask
-
-        stackView.orientation = .horizontal
-        stackView.alignment = .centerY
-        stackView.spacing = WorkspaceTouchBarStyle.itemSpacing
-        addSubview(stackView)
 
         emptyLabel.textColor = WorkspaceTouchBarStyle.secondaryTextColor
         emptyLabel.alignment = .center
@@ -330,52 +330,29 @@ final class AgentIconRowView: NSView {
 
     override func layout() {
         super.layout()
-        if let edgeMask = layer?.mask as? CAGradientLayer {
-            edgeMask.frame = bounds
-            let fadeFraction = min(
-                WorkspaceTouchBarStyle.agentEdgeFadeWidth
-                    / max(bounds.width, 1),
-                0.28
-            )
-            edgeMask.locations = [
-                0,
-                NSNumber(value: fadeFraction),
-                NSNumber(value: 1 - fadeFraction),
-                1,
-            ]
-        }
-        let contentSize = stackView.fittingSize
-        stackView.frame = NSRect(
-            x: floor(bounds.midX - contentSize.width / 2),
-            y: floor(bounds.midY - WorkspaceTouchBarStyle.controlHeight / 2),
-            width: contentSize.width,
-            height: WorkspaceTouchBarStyle.controlHeight
-        )
         emptyLabel.frame = bounds.insetBy(dx: 4, dy: 1)
+        guard !iconViews.isEmpty else { return }
+        let slots = WorkspaceTouchBarLayout.slotFrames(
+            in: bounds,
+            slotCount: iconViews.count
+        )
+        for (index, view) in iconViews.enumerated() where index < slots.count {
+            view.frame = slots[index]
+        }
     }
 
     func display(agents: [AvailableAgent]) {
-        iconViews.forEach { iconView in
-            stackView.removeArrangedSubview(iconView)
-            iconView.removeFromSuperview()
-        }
+        iconViews.forEach { $0.removeFromSuperview() }
         iconViews.removeAll()
 
         emptyLabel.isHidden = !agents.isEmpty
-        stackView.isHidden = agents.isEmpty
         for agent in agents {
             let iconView = WorkspaceAgentIconView(frame: .zero)
             iconView.display(agent)
             iconView.onActivate = { [weak self] selectedAgent in
                 self?.onAgentActivated?(selectedAgent)
             }
-            iconView.widthAnchor.constraint(
-                equalToConstant: WorkspaceTouchBarStyle.agentItemWidth
-            ).isActive = true
-            iconView.heightAnchor.constraint(
-                equalToConstant: WorkspaceTouchBarStyle.controlHeight
-            ).isActive = true
-            stackView.addArrangedSubview(iconView)
+            addSubview(iconView)
             iconViews.append(iconView)
         }
         needsLayout = true
@@ -388,10 +365,15 @@ final class AgentIconRowView: NSView {
 
 @MainActor
 final class WorkspaceBarView: NSView {
+    private let trayView = NSView()
     private let pathView = WorkspaceTouchBarPathView()
     private let agentIconRow = AgentIconRowView()
-    private let dividerView = NSView()
+    private let customAppsView = WorkspaceCustomAppsView()
+    private let pathAgentsDivider = NSView()
+    private let agentsCustomDivider = NSView()
     private var context: WorkspaceContext?
+    private var agentCount = 0
+    private var customAppCount = 0
 
     var onResolvePath: (() -> Void)?
     var onAgentActivated: ((AvailableAgent) -> Void)? {
@@ -399,11 +381,27 @@ final class WorkspaceBarView: NSView {
             agentIconRow.onAgentActivated = onAgentActivated
         }
     }
+    var onAddCustomApp: (() -> Void)? {
+        didSet {
+            customAppsView.onAddCustomApp = onAddCustomApp
+        }
+    }
+    var onOpenCustomApp: ((CustomWorkspaceApp) -> Void)? {
+        didSet {
+            customAppsView.onOpenCustomApp = onOpenCustomApp
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
+
+        trayView.wantsLayer = true
+        trayView.layer?.backgroundColor =
+            WorkspaceTouchBarStyle.trayBackground.cgColor
+        trayView.layer?.cornerRadius = WorkspaceTouchBarStyle.trayCornerRadius
+        addSubview(trayView)
 
         pathView.onActivate = { [weak self] in
             self?.onResolvePath?()
@@ -414,10 +412,22 @@ final class WorkspaceBarView: NSView {
             self?.onAgentActivated?(agent)
         }
         addSubview(agentIconRow)
-        dividerView.wantsLayer = true
-        dividerView.layer?.backgroundColor = WorkspaceTouchBarStyle
-            .dividerColor.cgColor
-        addSubview(dividerView)
+
+        customAppsView.onAddCustomApp = { [weak self] in
+            self?.onAddCustomApp?()
+        }
+        customAppsView.onOpenCustomApp = { [weak self] app in
+            self?.onOpenCustomApp?(app)
+        }
+        addSubview(customAppsView)
+
+        for divider in [pathAgentsDivider, agentsCustomDivider] {
+            divider.wantsLayer = true
+            divider.layer?.backgroundColor = WorkspaceTouchBarStyle
+                .dividerColor.cgColor
+            addSubview(divider)
+        }
+        reloadCustomAppsFromPreferences()
         showIdle(lastPath: WorkspacePreferences.lastPath)
     }
 
@@ -430,27 +440,83 @@ final class WorkspaceBarView: NSView {
         true
     }
 
+    func reloadCustomAppsFromPreferences() {
+        let apps = WorkspacePreferences.customApps
+        customAppCount = apps.count
+        customAppsView.display(apps: apps)
+        needsLayout = true
+    }
+
     override func layout() {
         super.layout()
-        let regions = WorkspaceTouchBarLayout.regionFrames(in: bounds)
-        pathView.frame = WorkspaceTouchBarLayout.centeredControlFrame(
-            in: regions.path,
-            preferredWidth: regions.path.width
+        guard bounds.width > 1, bounds.height > 1 else { return }
+
+        let scale = window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        trayView.layer?.contentsScale = scale
+
+        // Mirror fallback: no embedded switcher; tray full width.
+        // Path plate hugs title and is centered in the path zone.
+        let tray = WorkspaceTouchBarLayout.trayFrame(in: bounds)
+        trayView.frame = tray
+        let pathPreferred = pathView.preferredPillWidth
+        let regions = WorkspaceTouchBarLayout.regionFrames(
+            in: tray,
+            pathPreferredWidth: pathPreferred
         )
-        agentIconRow.frame = WorkspaceTouchBarLayout.centeredControlFrame(
-            in: regions.agents,
-            preferredWidth: regions.agents.width
+        let pathInner = WorkspaceTouchBarLayout.zoneContentRect(regions.path)
+        let pathHeight = max(
+            tray.height - WorkspaceTouchBarLayout.slotVerticalInset * 2,
+            22
         )
-        dividerView.frame = NSRect(
-            x: floor((regions.path.maxX + regions.agents.minX) / 2),
-            y: floor(bounds.midY - 9),
-            width: 1,
-            height: 18
+        let pathPlateWidth = min(max(pathPreferred, 1), pathInner.width)
+        pathView.frame = NSRect(
+            x: floor(pathInner.midX - pathPlateWidth / 2),
+            y: tray.midY - pathHeight / 2,
+            width: pathPlateWidth,
+            height: pathHeight
+        )
+
+        let agentsInner = WorkspaceTouchBarLayout.zoneContentRect(regions.agents)
+        let customInner = WorkspaceTouchBarLayout.zoneContentRect(regions.custom)
+        agentIconRow.frame = NSRect(
+            x: agentsInner.minX,
+            y: tray.minY,
+            width: agentsInner.width,
+            height: tray.height
+        )
+        customAppsView.frame = NSRect(
+            x: customInner.minX,
+            y: tray.minY,
+            width: customInner.width,
+            height: tray.height
+        )
+
+        let dividerHeight: CGFloat = 18
+        pathAgentsDivider.frame = NSRect(
+            x: floor(
+                regions.agents.minX
+                    - WorkspaceTouchBarLayout.zoneDividerWidth / 2
+            ),
+            y: floor(tray.midY - dividerHeight / 2),
+            width: WorkspaceTouchBarLayout.zoneDividerWidth,
+            height: dividerHeight
+        )
+        agentsCustomDivider.frame = NSRect(
+            x: floor(
+                regions.custom.minX
+                    - WorkspaceTouchBarLayout.zoneDividerWidth / 2
+            ),
+            y: floor(tray.midY - dividerHeight / 2),
+            width: WorkspaceTouchBarLayout.zoneDividerWidth,
+            height: dividerHeight
         )
     }
 
     func showIdle(lastPath: URL?) {
         context = nil
+        agentCount = 0
         if let lastPath {
             pathView.display(
                 image: WorkspaceTouchBarStyle.symbol(
@@ -473,10 +539,12 @@ final class WorkspaceBarView: NSView {
             )
         }
         agentIconRow.display(agents: [])
+        needsLayout = true
     }
 
     func showResolving() {
         context = nil
+        agentCount = 0
         pathView.display(
             image: WorkspaceTouchBarStyle.symbol(
                 named: "hourglass",
@@ -487,6 +555,7 @@ final class WorkspaceBarView: NSView {
             enabled: false
         )
         agentIconRow.display(agents: [])
+        needsLayout = true
     }
 
     func showReady(
@@ -494,6 +563,7 @@ final class WorkspaceBarView: NSView {
         agents: [AvailableAgent]
     ) {
         self.context = context
+        agentCount = agents.count
         pathView.display(
             image: WorkspaceTouchBarStyle.symbol(
                 named: "folder",
@@ -505,6 +575,7 @@ final class WorkspaceBarView: NSView {
         )
         agentIconRow.display(agents: agents)
         agentIconRow.setEnabled(true)
+        needsLayout = true
     }
 
     func showLaunching(
@@ -530,6 +601,7 @@ final class WorkspaceBarView: NSView {
         agents: [AvailableAgent]
     ) {
         self.context = context
+        agentCount = context == nil ? 0 : agents.count
         pathView.display(
             image: nil,
             title: message,
@@ -538,6 +610,7 @@ final class WorkspaceBarView: NSView {
         )
         agentIconRow.display(agents: context == nil ? [] : agents)
         agentIconRow.setEnabled(context != nil)
+        needsLayout = true
     }
 
 }

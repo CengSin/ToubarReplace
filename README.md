@@ -40,7 +40,7 @@ Scripts/run-regression.sh
 - Claude Code：通过设置中选择的终端在项目目录中启动交互式 `claude`。当前支持已安装的 Otty 和 Terminal.app；Otty 使用 `otty-cli`，Terminal 适配器首次使用时 macOS 可能请求 Automation 权限。
 - Grok Build：发现 `grok` CLI（包含 `~/.grok/bin/grok`），并通过所选终端在项目目录中启动交互式 Grok Build TUI。
 
-物理 Touch Bar 的 Workspace 按设计稿 v2：**单条 full-width item** 内左侧返回（网格外），右侧 continuous tray。tray 为 **Path（4/10×0.9）| Agents | Custom**（Path 区再缩 10%，多出宽度由后两区均分）；目录 plate 在 Path 区内按标题收窄并水平居中，Agent/自定义为等分槽位（自定义空态「自定义app」，最多 3 个 + 添加位，满员 FIFO）。点自定义图标仅打开 App。item 目标宽度由设置中的镜像像素宽换算为点，并**上限为 `1050` pt**（略低于 DFR 全宽约 `1085`，避免右侧自定义/`+` 被 Function Row 裁切；默认镜像 `2300` @2x 点宽会被 cap）；高度固定为 Touch Bar chrome（约 30pt）。启动 Agent 期间会立即禁用；成功后默认约 0.5 秒返回镜像，可在设置中关闭。
+物理 Touch Bar 的 Workspace 按设计稿 v2：**单条 full-width item** 内左侧返回（网格外），右侧 continuous tray。tray 为 **Path（4/10 base）| Agents | Custom**；目录名较长时 Path 区可扩展（agents|custom 均分剩余，并保留最小可用宽），目录 plate 在 Path 区内按标题收窄并水平居中，Agent/自定义为等分槽位（自定义空态「自定义app」，最多 3 个 + 添加位，满员 FIFO）。点自定义图标仅打开 App。item 目标宽度由设置中的镜像像素宽换算为点，并**上限为 `1010` pt**（低于 DFR 全宽约 `1085`，避免右侧自定义/`+` 被 Function Row 裁切；默认镜像 `2300` @2x 点宽会被 cap）；高度固定为 Touch Bar chrome（约 30pt）。启动 Agent 期间会立即禁用；成功后默认约 0.5 秒返回镜像，可在设置中关闭。
 
 如果“App 控制”或“快速操作”模式暂时没有可显示的上下文内容，镜像窗口会保留最后一张有效画面并显示非错误提示；切换到支持触控栏的 App 或启用快速操作后会自动恢复。显示流不可用、启动失败、Control Strip 布局为空，或者固定内容模式下 TouchBarServer 持续只返回黑帧时，镜像窗口仍会显示对应错误原因。
 

@@ -2,8 +2,6 @@ import AppKit
 import CoreGraphics
 
 struct TouchBarWindowMetrics {
-    // This is only the first-run size. It is intentionally not derived from
-    // the captured frame: the user can resize the mirror to match their bar.
     static let defaultSize = CGSize(width: 1_150, height: 35)
     static let minimumSize = CGSize(width: 240, height: 18)
     static let edgeRailWidth: CGFloat = 36
@@ -106,9 +104,7 @@ final class TouchBarSurfaceView: NSView {
     private let imageView: NSView
 
     override init(frame frameRect: NSRect) {
-        statusLabel = NSTextField(
-            labelWithString: "正在读取 Touch Bar…"
-        )
+        statusLabel = NSTextField(labelWithString: "正在读取 Touch Bar…")
         imageView = NSView(frame: .zero)
         super.init(frame: frameRect)
 
@@ -209,17 +205,16 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             forPixelSize: TouchBarPreferences.mirrorPixelSize,
             backingScaleFactor: scale
         )
+        // Switcher is either physical Touch Bar or floating window — never attached rail.
         let initialRootSize = TouchBarWindowMetrics.rootSize(
             forMirrorSize: initialMirrorSize,
-            edgeRailWidth: WorkspacePreferences.floatingSwitcher
-                ? 0
-                : TouchBarWindowMetrics.edgeRailWidth
+            edgeRailWidth: 0
         )
         let switcherSide = WorkspacePreferences.switcherSide
         rootView = TouchBarRootView(
             frame: NSRect(origin: .zero, size: initialRootSize),
             switcherSide: switcherSide,
-            showsAttachedSwitcher: !WorkspacePreferences.floatingSwitcher
+            showsAttachedSwitcher: false
         )
 
         let panel = NSPanel(
@@ -240,41 +235,17 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         panel.becomesKeyOnlyIfNeeded = true
         panel.minSize = TouchBarWindowMetrics.rootSize(
             forMirrorSize: TouchBarWindowMetrics.minimumSize,
-            edgeRailWidth: WorkspacePreferences.floatingSwitcher
-                ? 0
-                : TouchBarWindowMetrics.edgeRailWidth
+            edgeRailWidth: 0
         )
         panel.animationBehavior = .none
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.contentView = rootView
         panel.setFrameAutosaveName("ToubarReplaceMirrorWindow")
-        let restoredFrame = panel.setFrameUsingName(
-            "ToubarReplaceMirrorWindow"
-        )
+        let restoredFrame = panel.setFrameUsingName("ToubarReplaceMirrorWindow")
         panel.setContentSize(initialRootSize)
-        let hadMigratedAttachedFrame = WorkspacePreferences.hasMigratedRootFrame
-        if restoredFrame && !hadMigratedAttachedFrame {
-            if !WorkspacePreferences.floatingSwitcher && switcherSide == .left {
-                var origin = panel.frame.origin
-                origin.x -= TouchBarWindowMetrics.edgeRailWidth
-                panel.setFrameOrigin(origin)
-            }
-            WorkspacePreferences.hasMigratedRootFrame = true
-        } else if !restoredFrame {
-            WorkspacePreferences.hasMigratedRootFrame = true
-        }
-        if WorkspacePreferences.floatingSwitcher {
-            if restoredFrame && hadMigratedAttachedFrame
-                && !WorkspacePreferences.hasMigratedFloatingMirrorFrame
-                && switcherSide == .left
-            {
-                var origin = panel.frame.origin
-                origin.x += TouchBarWindowMetrics.edgeRailWidth
-                panel.setFrameOrigin(origin)
-            }
-            WorkspacePreferences.hasMigratedFloatingMirrorFrame = true
-        }
+        WorkspacePreferences.hasMigratedRootFrame = true
+        WorkspacePreferences.hasMigratedFloatingMirrorFrame = true
 
         let idleOpacityController = TouchBarIdleOpacityController(window: panel)
         self.idleOpacityController = idleOpacityController
@@ -321,7 +292,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         showFloatingWorkspaceSwitcherIfNeeded()
         idleOpacityController.start()
         capture.start()
-        // Show the physical Touch Bar switcher button in mirror mode.
         presentPhysicalSwitcherIfNeeded()
     }
 
@@ -386,7 +356,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         window.setContentSize(
             TouchBarWindowMetrics.rootSize(
                 forMirrorSize: mirrorPointSize,
-                edgeRailWidth: attachedSwitcherWidth
+                edgeRailWidth: 0
             )
         )
         setWindowOriginPreservingMirrorX(mirrorOriginX)
@@ -410,28 +380,25 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         WorkspacePreferences.floatingSwitcher
     }
 
+    var workspaceSwitcherDisplayMode: WorkspaceSwitcherDisplayMode {
+        WorkspacePreferences.switcherDisplayMode
+    }
+
     func setWorkspaceSwitcherFloats(_ floats: Bool) {
-        guard floats != WorkspacePreferences.floatingSwitcher else { return }
-        guard let window else { return }
-        let mirrorOriginX = currentMirrorOriginX
-        let mirrorSize = rootView.mirrorViewportSize
-        WorkspacePreferences.floatingSwitcher = floats
-        rootView.setAttachedSwitcherVisible(!floats)
-        window.minSize = TouchBarWindowMetrics.rootSize(
-            forMirrorSize: TouchBarWindowMetrics.minimumSize,
-            edgeRailWidth: attachedSwitcherWidth
-        )
-        window.setContentSize(
-            TouchBarWindowMetrics.rootSize(
-                forMirrorSize: mirrorSize,
-                edgeRailWidth: attachedSwitcherWidth
-            )
-        )
-        rootView.layoutSubtreeIfNeeded()
-        setWindowOriginPreservingMirrorX(mirrorOriginX)
-        WorkspacePreferences.hasMigratedFloatingMirrorFrame = floats
+        setWorkspaceSwitcherDisplayMode(floats ? .floating : .touchBar)
+    }
+
+    func setWorkspaceSwitcherDisplayMode(_ mode: WorkspaceSwitcherDisplayMode) {
+        guard mode != WorkspacePreferences.switcherDisplayMode else { return }
+        WorkspacePreferences.switcherDisplayMode = mode
+        rootView.setAttachedSwitcherVisible(false)
         configureFloatingWorkspaceSwitcher()
         showFloatingWorkspaceSwitcherIfNeeded()
+        if mode == .floating {
+            switcherTouchBarController.dismiss()
+        } else {
+            presentPhysicalSwitcherIfNeeded()
+        }
         persistCurrentPixelSize()
     }
 
@@ -475,30 +442,22 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         let frame = window.frame
         let mirrorSize = rootView.mirrorViewportSize
         let mirrorX = visibleFrame.midX - mirrorSize.width / 2
-        let rootX = rootView.switcherSide == .left
-            ? mirrorX - attachedSwitcherWidth
-            : mirrorX
         let origin: NSPoint
         switch displayPosition {
         case .bottom:
-            origin = NSPoint(
-                x: rootX,
-                y: screen.frame.minY
-            )
+            origin = NSPoint(x: mirrorX, y: screen.frame.minY)
         case .top:
             origin = NSPoint(
-                x: rootX,
+                x: mirrorX,
                 y: visibleFrame.maxY - frame.height - 18
             )
         case .center:
             origin = NSPoint(
-                x: rootX,
+                x: mirrorX,
                 y: visibleFrame.midY - frame.height / 2
             )
         }
-        window.setFrameOrigin(
-            origin
-        )
+        window.setFrameOrigin(origin)
     }
 
     private func persistCurrentPixelSize() {
@@ -509,24 +468,14 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
 
     private var currentMirrorOriginX: CGFloat {
         guard let window else { return 0 }
-        return rootView.switcherSide == .left
-            ? window.frame.minX + attachedSwitcherWidth
-            : window.frame.minX
+        return window.frame.minX
     }
 
     private func setWindowOriginPreservingMirrorX(_ mirrorOriginX: CGFloat) {
         guard let window else { return }
         var origin = window.frame.origin
-        origin.x = rootView.switcherSide == .left
-            ? mirrorOriginX - attachedSwitcherWidth
-            : mirrorOriginX
+        origin.x = mirrorOriginX
         window.setFrameOrigin(origin)
-    }
-
-    private var attachedSwitcherWidth: CGFloat {
-        rootView.showsAttachedSwitcher
-            ? TouchBarWindowMetrics.edgeRailWidth
-            : 0
     }
 
     private func installWorkspaceActions() {
@@ -551,6 +500,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         workspaceTouchBarController.onPresentationInterrupted = { [weak self] in
             self?.handleWorkspacePresentationInterrupted()
         }
+        workspaceTouchBarController.onToggleWorkspace = { [weak self] in
+            self?.toggleWorkspace()
+        }
         switcherTouchBarController.onToggleWorkspace = { [weak self] in
             self?.lastFrontmostContext = FrontmostAppContext.capture()
             self?.toggleWorkspace()
@@ -558,7 +510,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func configureFloatingWorkspaceSwitcher() {
-        guard WorkspacePreferences.floatingSwitcher else {
+        guard WorkspacePreferences.switcherDisplayMode == .floating else {
             workspaceSwitcherWindowController?.window?.orderOut(nil)
             workspaceSwitcherWindowController = nil
             return
@@ -583,7 +535,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private func showFloatingWorkspaceSwitcherIfNeeded() {
         guard
             isRunning,
-            WorkspacePreferences.floatingSwitcher,
+            WorkspacePreferences.switcherDisplayMode == .floating,
             let controller = workspaceSwitcherWindowController,
             let mirrorWindow = window
         else {
@@ -597,6 +549,10 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
 
     private func presentPhysicalSwitcherIfNeeded() {
         guard isRunning, rootView.scene == .mirror else { return }
+        guard WorkspacePreferences.switcherDisplayMode == .touchBar else {
+            switcherTouchBarController.dismiss()
+            return
+        }
         switcherTouchBarController.present()
     }
 
@@ -609,12 +565,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             currentWorkspaceContext = nil
             availableAgents = []
             rootView.setScene(.workspace)
-            workspaceSwitcherWindowController?.switcherView.setScene(
-                .workspace
-            )
+            workspaceSwitcherWindowController?.switcherView.setScene(.workspace)
             idleOpacityController.suspendAtFullOpacity()
 
-            // Replace the small switcher bar with the full Workspace bar.
             switcherTouchBarController.dismiss()
 
             do {
@@ -627,7 +580,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     agents: []
                 )
                 rootView.setWorkspaceFallbackVisible(true)
-                // Fall back: put the switcher button back if Workspace failed.
                 presentPhysicalSwitcherIfNeeded()
                 return
             }
@@ -663,8 +615,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         idleOpacityController.resumeFrameDrivenOpacity()
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
-
-        // Restore the physical Touch Bar switcher button.
         presentPhysicalSwitcherIfNeeded()
     }
 
@@ -678,8 +628,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         idleOpacityController.resumeFrameDrivenOpacity()
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
-
-        // Restore the physical Touch Bar switcher button.
         presentPhysicalSwitcherIfNeeded()
     }
 
@@ -811,7 +759,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     agent,
                     at: context.directoryURL
                 )
-                // 启动成功后始终恢复状态（无论 autoCollapse 如何）
                 self.rootView.workspaceView.showReady(
                     context: context,
                     agents: self.availableAgents
@@ -820,9 +767,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     context: context,
                     agents: self.availableAgents
                 )
-                guard WorkspacePreferences.autoCollapse else {
-                    return
-                }
+                guard WorkspacePreferences.autoCollapse else { return }
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .milliseconds(500))
                     self?.closeWorkspace()

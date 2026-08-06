@@ -184,6 +184,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private let switcherTouchBarController = SwitcherTouchBarController()
     private var workspaceSwitcherWindowController:
         WorkspaceSwitcherWindowController?
+    /// True only when launch restored an autosaved frame under `.lastSaved`.
     private var hasRestoredFrame = false
     private var workspaceObservers: [NSObjectProtocol] = []
     private var finderSyncTask: Task<Void, Never>?
@@ -195,6 +196,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private var lastLaunchSignature: (AgentID, String, Date)?
     private(set) var displayPosition = TouchBarPreferences.displayPosition
     var onPixelSizeChanged: ((CGSize) -> Void)?
+    var onCustomTopLeftChanged: ((CGPoint) -> Void)?
     var onRequestWorkspaceDirectory: (
         (@escaping (URL?) -> Void) -> Void
     )?
@@ -241,8 +243,14 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.contentView = rootView
-        panel.setFrameAutosaveName("ToubarReplaceMirrorWindow")
-        let restoredFrame = panel.setFrameUsingName("ToubarReplaceMirrorWindow")
+        // Always record frames so "上次关闭时的位置" can restore later.
+        panel.setFrameAutosaveName(TouchBarPreferences.mirrorWindowAutosaveName)
+        var restoredFrame = false
+        if TouchBarPreferences.displayPosition.restoresAutosavedFrame {
+            restoredFrame = panel.setFrameUsingName(
+                TouchBarPreferences.mirrorWindowAutosaveName
+            )
+        }
         panel.setContentSize(initialRootSize)
         WorkspacePreferences.hasMigratedRootFrame = true
         WorkspacePreferences.hasMigratedFloatingMirrorFrame = true
@@ -285,7 +293,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
 
     func start() {
         isRunning = true
-        if !hasRestoredFrame {
+        // Autosave restore only when setting is "上次关闭时的位置".
+        if !(displayPosition.restoresAutosavedFrame && hasRestoredFrame) {
             positionWindow()
         }
         window?.orderFrontRegardless()
@@ -312,7 +321,60 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     func setDisplayPosition(_ position: TouchBarDisplayPosition) {
         displayPosition = position
         TouchBarPreferences.displayPosition = position
+        if position.restoresAutosavedFrame, let window {
+            let restored = window.setFrameUsingName(
+                TouchBarPreferences.mirrorWindowAutosaveName
+            )
+            hasRestoredFrame = restored
+            if restored {
+                let scale = window.screen?.backingScaleFactor
+                    ?? NSScreen.main?.backingScaleFactor
+                    ?? 2
+                let mirrorPointSize = TouchBarWindowMetrics.pointSize(
+                    forPixelSize: TouchBarPreferences.mirrorPixelSize,
+                    backingScaleFactor: scale
+                )
+                window.setContentSize(
+                    TouchBarWindowMetrics.rootSize(
+                        forMirrorSize: mirrorPointSize,
+                        edgeRailWidth: 0
+                    )
+                )
+                return
+            }
+        } else {
+            hasRestoredFrame = false
+        }
         positionWindow()
+    }
+
+    /// Current top-left of the mirror window in AppKit screen points.
+    var customTopLeft: CGPoint {
+        guard let window else {
+            return TouchBarPreferences.hasCustomTopLeft
+                ? TouchBarPreferences.customTopLeft
+                : defaultCustomTopLeftFallback()
+        }
+        return CGPoint(x: window.frame.minX, y: window.frame.maxY)
+    }
+
+    func setCustomTopLeft(_ topLeft: CGPoint) {
+        TouchBarPreferences.customTopLeft = topLeft
+        onCustomTopLeftChanged?(topLeft)
+        if displayPosition.usesCustomTopLeft {
+            positionWindow()
+        }
+    }
+
+    /// Re-hide the mirror switcher close box after the app becomes frontmost.
+    func suppressPhysicalSwitcherCloseBox() {
+        switcherTouchBarController.suppressCloseBox()
+    }
+
+    /// Ensure the mirror-mode physical switcher is present (and close box hidden).
+    func ensurePhysicalSwitcherPresented() {
+        presentPhysicalSwitcherIfNeeded()
+        suppressPhysicalSwitcherCloseBox()
     }
 
     var displayFramesPerSecond: Int {
@@ -456,8 +518,42 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 x: mirrorX,
                 y: visibleFrame.midY - frame.height / 2
             )
+        case .lastSaved:
+            // Caller already tried autosave restore; fall back to bottom.
+            origin = NSPoint(x: mirrorX, y: screen.frame.minY)
+        case .custom:
+            let topLeft: CGPoint
+            if TouchBarPreferences.hasCustomTopLeft {
+                topLeft = TouchBarPreferences.customTopLeft
+            } else {
+                topLeft = CGPoint(
+                    x: mirrorX,
+                    y: screen.frame.minY + frame.height
+                )
+                TouchBarPreferences.customTopLeft = topLeft
+                onCustomTopLeftChanged?(topLeft)
+            }
+            // AppKit window origin is bottom-left.
+            origin = NSPoint(x: topLeft.x, y: topLeft.y - frame.height)
         }
         window.setFrameOrigin(origin)
+    }
+
+    private func defaultCustomTopLeftFallback() -> CGPoint {
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let visibleFrame = screen?.visibleFrame ?? .zero
+        let scale = screen?.backingScaleFactor ?? 2
+        let mirrorPointSize = TouchBarWindowMetrics.pointSize(
+            forPixelSize: TouchBarPreferences.mirrorPixelSize,
+            backingScaleFactor: scale
+        )
+        let rootSize = TouchBarWindowMetrics.rootSize(
+            forMirrorSize: mirrorPointSize,
+            edgeRailWidth: 0
+        )
+        let mirrorX = visibleFrame.midX - mirrorPointSize.width / 2
+        let bottomY = screen?.frame.minY ?? 0
+        return CGPoint(x: mirrorX, y: bottomY + rootSize.height)
     }
 
     private func persistCurrentPixelSize() {
@@ -506,6 +602,10 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         switcherTouchBarController.onToggleWorkspace = { [weak self] in
             self?.lastFrontmostContext = FrontmostAppContext.capture()
             self?.toggleWorkspace()
+        }
+        switcherTouchBarController.onPresentationInterrupted = { [weak self] in
+            // Close-box / system dismissal while still in mirror mode.
+            self?.presentPhysicalSwitcherIfNeeded()
         }
     }
 

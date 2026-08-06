@@ -25,6 +25,12 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
         windowController?.stop()
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // Settings / alerts make the app frontmost and can re-show the
+        // system-modal close box next to the mirror grid switcher.
+        windowController?.suppressPhysicalSwitcherCloseBox()
+    }
+
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(
@@ -84,6 +90,10 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
             settingsWindowController = TouchBarSettingsWindowController(
                 currentPosition: windowController?.displayPosition
                     ?? TouchBarPreferences.displayPosition,
+                currentCustomTopLeft: windowController?.customTopLeft
+                    ?? (TouchBarPreferences.hasCustomTopLeft
+                        ? TouchBarPreferences.customTopLeft
+                        : .zero),
                 currentPixelSize: windowController?.mirrorPixelSize
                     ?? TouchBarPreferences.mirrorPixelSize,
                 currentFramesPerSecond: windowController?.displayFramesPerSecond
@@ -103,6 +113,14 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                     ?? WorkspacePreferences.terminalAdapterID,
                 onPositionChanged: { [weak self] position in
                     self?.windowController?.setDisplayPosition(position)
+                    if let topLeft = self?.windowController?.customTopLeft {
+                        self?.settingsWindowController?.updateCustomTopLeft(
+                            topLeft
+                        )
+                    }
+                },
+                onCustomTopLeftChanged: { [weak self] topLeft in
+                    self?.windowController?.setCustomTopLeft(topLeft)
                 },
                 onWorkspaceSideChanged: { [weak self] side in
                     self?.windowController?.setWorkspaceSwitcherSide(side)
@@ -128,14 +146,28 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                         framesPerSecond
                     )
                 },
-                onWindowClosed: {
+                onWindowClosed: { [weak self] in
                     NSApp.setActivationPolicy(.accessory)
+                    self?.windowController?.ensurePhysicalSwitcherPresented()
                 }
             )
+            windowController?.onCustomTopLeftChanged = {
+                [weak self] topLeft in
+                self?.settingsWindowController?.updateCustomTopLeft(topLeft)
+            }
         }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+        // Activation can reintroduce the Touch Bar close box; suppress again
+        // after the function row rebuilds.
+        windowController?.suppressPhysicalSwitcherCloseBox()
+        DispatchQueue.main.async { [weak self] in
+            self?.windowController?.suppressPhysicalSwitcherCloseBox()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.windowController?.suppressPhysicalSwitcherCloseBox()
+        }
     }
 
     @objc
@@ -160,6 +192,7 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
         if !settingsIsVisible {
             NSApp.setActivationPolicy(.accessory)
         }
+        windowController?.ensurePhysicalSwitcherPresented()
     }
 
     @objc
@@ -194,6 +227,7 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                 if self?.settingsWindowController?.window?.isVisible != true {
                     NSApp.setActivationPolicy(.accessory)
                 }
+                self?.windowController?.ensurePhysicalSwitcherPresented()
                 completion(directoryURL)
             }
         }

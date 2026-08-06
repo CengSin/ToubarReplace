@@ -21,3 +21,7 @@ DerivedData/
 /running.log
 
 /.idea/
+
+/docs/
+
+AGENTS.md

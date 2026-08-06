@@ -4,6 +4,10 @@ enum TouchBarDisplayPosition: String, CaseIterable {
     case bottom
     case top
     case center
+    /// Restore AppKit autosaved mirror frame origin on launch.
+    case lastSaved
+    /// Use explicit top-left coordinates from preferences.
+    case custom
 
     var title: String {
         switch self {
@@ -13,7 +17,19 @@ enum TouchBarDisplayPosition: String, CaseIterable {
             return "顶部"
         case .center:
             return "屏幕中央"
+        case .lastSaved:
+            return "上次关闭时的位置"
+        case .custom:
+            return "自定义坐标"
         }
+    }
+
+    var usesCustomTopLeft: Bool {
+        self == .custom
+    }
+
+    var restoresAutosavedFrame: Bool {
+        self == .lastSaved
     }
 }
 
@@ -23,6 +39,10 @@ enum TouchBarPreferences {
     private static let heightPixelsKey = "ToubarReplace.heightPixels"
     private static let displayFramesPerSecondKey =
         "ToubarReplace.displayFramesPerSecond"
+    private static let customTopLeftXKey = "ToubarReplace.customTopLeftX"
+    private static let customTopLeftYKey = "ToubarReplace.customTopLeftY"
+
+    static let mirrorWindowAutosaveName = "ToubarReplaceMirrorWindow"
 
     private static let legacyDefaultMirrorPixelSize = CGSize(
         width: 2_008,
@@ -42,6 +62,27 @@ enum TouchBarPreferences {
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: positionKey)
+        }
+    }
+
+    /// Whether the user has explicitly saved a custom top-left origin.
+    static var hasCustomTopLeft: Bool {
+        UserDefaults.standard.object(forKey: customTopLeftXKey) != nil
+            && UserDefaults.standard.object(forKey: customTopLeftYKey) != nil
+    }
+
+    /// Top-left of the mirror window in AppKit screen points
+    /// (`y` increases upward).
+    static var customTopLeft: CGPoint {
+        get {
+            CGPoint(
+                x: UserDefaults.standard.double(forKey: customTopLeftXKey),
+                y: UserDefaults.standard.double(forKey: customTopLeftYKey)
+            )
+        }
+        set {
+            UserDefaults.standard.set(newValue.x, forKey: customTopLeftXKey)
+            UserDefaults.standard.set(newValue.y, forKey: customTopLeftYKey)
         }
     }
 
@@ -99,6 +140,8 @@ enum TouchBarPreferences {
 @MainActor
 final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelegate {
     private let positionPopup: NSPopUpButton
+    private let originXField: NSTextField
+    private let originYField: NSTextField
     private let switcherDisplayModePopup: NSPopUpButton
     private let terminalAdapterPopup: NSPopUpButton
     private let widthField: NSTextField
@@ -106,6 +149,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
     private let framesPerSecondField: NSTextField
     private let workspaceAutoCollapseCheckbox: NSButton
     private let onPositionChanged: (TouchBarDisplayPosition) -> Void
+    private let onCustomTopLeftChanged: (CGPoint) -> Void
     private let onWorkspaceFloatingSwitcherChanged: (Bool) -> Void
     private let onWorkspaceAutoCollapseChanged: (Bool) -> Void
     private let terminalAdapters: [TerminalAdapter]
@@ -116,6 +160,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
 
     init(
         currentPosition: TouchBarDisplayPosition,
+        currentCustomTopLeft: CGPoint,
         currentPixelSize: CGSize,
         currentFramesPerSecond: Int,
         currentWorkspaceSide: WorkspaceSwitcherSide,
@@ -124,6 +169,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         terminalAdapters: [TerminalAdapter],
         currentTerminalAdapterID: TerminalAdapterID,
         onPositionChanged: @escaping (TouchBarDisplayPosition) -> Void,
+        onCustomTopLeftChanged: @escaping (CGPoint) -> Void,
         onWorkspaceSideChanged: @escaping (WorkspaceSwitcherSide) -> Void,
         onWorkspaceFloatingSwitcherChanged: @escaping (Bool) -> Void,
         onWorkspaceAutoCollapseChanged: @escaping (Bool) -> Void,
@@ -133,6 +179,8 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         onWindowClosed: @escaping () -> Void
     ) {
         self.positionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        self.originXField = NSTextField()
+        self.originYField = NSTextField()
         self.switcherDisplayModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
         self.terminalAdapterPopup = NSPopUpButton(frame: .zero, pullsDown: false)
         self.widthField = NSTextField()
@@ -144,6 +192,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             action: nil
         )
         self.onPositionChanged = onPositionChanged
+        self.onCustomTopLeftChanged = onCustomTopLeftChanged
         self.onWorkspaceFloatingSwitcherChanged = onWorkspaceFloatingSwitcherChanged
         self.onWorkspaceAutoCollapseChanged = onWorkspaceAutoCollapseChanged
         self.terminalAdapters = terminalAdapters
@@ -156,7 +205,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         _ = onWorkspaceSideChanged
         _ = currentWorkspaceSide
 
-        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 420))
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 500))
         let titleLabel = NSTextField(labelWithString: "Touch Bar 镜像设置")
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
 
@@ -165,6 +214,24 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         positionPopup.selectItem(
             at: TouchBarDisplayPosition.allCases.firstIndex(of: currentPosition) ?? 0
         )
+
+        let originLabel = NSTextField(labelWithString: "起始坐标")
+        let originXCaption = NSTextField(labelWithString: "X")
+        let originYCaption = NSTextField(labelWithString: "Y")
+        let originUnitLabel = NSTextField(labelWithString: "pt（窗口左上角）")
+        originUnitLabel.textColor = .secondaryLabelColor
+        let originFormatter = NumberFormatter()
+        originFormatter.allowsFloats = true
+        originFormatter.minimumFractionDigits = 0
+        originFormatter.maximumFractionDigits = 1
+        originFormatter.minimum = -20_000
+        originFormatter.maximum = 20_000
+        originXField.formatter = originFormatter
+        originYField.formatter = originFormatter
+        originXField.alignment = .right
+        originYField.alignment = .right
+        originXField.doubleValue = currentCustomTopLeft.x
+        originYField.doubleValue = currentCustomTopLeft.y
 
         let switcherModeLabel = NSTextField(labelWithString: "切换按钮")
         switcherDisplayModePopup.addItems(
@@ -213,16 +280,33 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         framesPerSecondField.integerValue = currentFramesPerSecond
 
         let hintLabel = NSTextField(
-            labelWithString: "切换按钮二选一：物理 Touch Bar 可触摸，或使用独立浮窗。Workspace 模式下物理栏左侧有返回按钮。"
+            labelWithString: """
+            展示位置：固定锚点、上次关闭位置，或自定义窗口左上角（AppKit 坐标，Y 向上）。\
+            切换按钮二选一：物理 Touch Bar 可触摸，或使用独立浮窗。
+            """
         )
         hintLabel.textColor = .secondaryLabelColor
-        hintLabel.maximumNumberOfLines = 3
+        hintLabel.maximumNumberOfLines = 4
         hintLabel.lineBreakMode = .byWordWrapping
 
         let positionRow = NSStackView(views: [positionLabel, positionPopup])
         positionRow.orientation = .horizontal
         positionRow.spacing = 12
         positionRow.alignment = .centerY
+
+        let originRow = NSStackView(
+            views: [
+                originLabel,
+                originXCaption,
+                originXField,
+                originYCaption,
+                originYField,
+                originUnitLabel,
+            ]
+        )
+        originRow.orientation = .horizontal
+        originRow.spacing = 8
+        originRow.alignment = .centerY
 
         let switcherModeRow = NSStackView(views: [switcherModeLabel, switcherDisplayModePopup])
         switcherModeRow.orientation = .horizontal
@@ -261,6 +345,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             views: [
                 titleLabel,
                 positionRow,
+                originRow,
                 switcherModeRow,
                 workspaceAutoCollapseRow,
                 terminalAdapterRow,
@@ -281,6 +366,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -24),
             positionLabel.widthAnchor.constraint(equalToConstant: 72),
+            originLabel.widthAnchor.constraint(equalToConstant: 72),
             switcherModeLabel.widthAnchor.constraint(equalToConstant: 72),
             workspaceAutoCollapseRow.arrangedSubviews[0].widthAnchor.constraint(
                 equalToConstant: 72
@@ -291,6 +377,8 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             positionPopup.widthAnchor.constraint(equalToConstant: 180),
             switcherDisplayModePopup.widthAnchor.constraint(equalToConstant: 180),
             terminalAdapterPopup.widthAnchor.constraint(equalToConstant: 180),
+            originXField.widthAnchor.constraint(equalToConstant: 70),
+            originYField.widthAnchor.constraint(equalToConstant: 70),
             widthField.widthAnchor.constraint(equalToConstant: 90),
             heightField.widthAnchor.constraint(equalToConstant: 70),
             framesPerSecondField.widthAnchor.constraint(equalToConstant: 90),
@@ -312,6 +400,10 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         window.delegate = self
         positionPopup.target = self
         positionPopup.action = #selector(positionChanged(_:))
+        originXField.target = self
+        originXField.action = #selector(customTopLeftChanged(_:))
+        originYField.target = self
+        originYField.action = #selector(customTopLeftChanged(_:))
         switcherDisplayModePopup.target = self
         switcherDisplayModePopup.action = #selector(switcherDisplayModeChanged(_:))
         workspaceAutoCollapseCheckbox.target = self
@@ -324,6 +416,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         heightField.action = #selector(pixelSizeChanged(_:))
         framesPerSecondField.target = self
         framesPerSecondField.action = #selector(framesPerSecondChanged(_:))
+        updateCustomOriginFieldsEnabled(for: currentPosition)
     }
 
     @available(*, unavailable)
@@ -335,13 +428,30 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         onWindowClosed()
     }
 
+    func updateCustomTopLeft(_ topLeft: CGPoint) {
+        originXField.doubleValue = topLeft.x
+        originYField.doubleValue = topLeft.y
+    }
+
     @objc
     private func positionChanged(_ sender: NSPopUpButton) {
         let itemIndex = sender.indexOfSelectedItem
         guard TouchBarDisplayPosition.allCases.indices.contains(itemIndex) else {
             return
         }
-        onPositionChanged(TouchBarDisplayPosition.allCases[itemIndex])
+        let position = TouchBarDisplayPosition.allCases[itemIndex]
+        updateCustomOriginFieldsEnabled(for: position)
+        onPositionChanged(position)
+    }
+
+    @objc
+    private func customTopLeftChanged(_ sender: NSTextField) {
+        let topLeft = CGPoint(
+            x: originXField.doubleValue,
+            y: originYField.doubleValue
+        )
+        updateCustomTopLeft(topLeft)
+        onCustomTopLeftChanged(topLeft)
     }
 
     @objc
@@ -389,5 +499,13 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         )
         framesPerSecondField.integerValue = framesPerSecond
         onFramesPerSecondChanged(framesPerSecond)
+    }
+
+    private func updateCustomOriginFieldsEnabled(for position: TouchBarDisplayPosition) {
+        let enabled = position.usesCustomTopLeft
+        originXField.isEnabled = enabled
+        originYField.isEnabled = enabled
+        originXField.alphaValue = enabled ? 1 : 0.5
+        originYField.alphaValue = enabled ? 1 : 0.5
     }
 }

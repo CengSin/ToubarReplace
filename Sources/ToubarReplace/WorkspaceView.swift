@@ -547,6 +547,9 @@ final class TouchBarRootView: NSView {
     let surfaceView: TouchBarSurfaceView
     let workspaceView: WorkspaceBarView
     private let switcherButton = WorkspaceActionButton()
+    /// Freezes the last mirror frame over the viewport during scene switches.
+    private let transitionCoverView = NSView(frame: .zero)
+    private var transitionCoverTask: Task<Void, Never>?
     private(set) var scene: BarScene = .mirror
     private(set) var switcherSide: WorkspaceSwitcherSide
     private(set) var showsAttachedSwitcher: Bool
@@ -585,6 +588,14 @@ final class TouchBarRootView: NSView {
         workspaceView.autoresizingMask = [.width, .height]
         workspaceView.isHidden = true
         addSubview(workspaceView)
+
+        transitionCoverView.wantsLayer = true
+        transitionCoverView.layer?.contentsGravity = .resizeAspect
+        transitionCoverView.layer?.backgroundColor = NSColor.black.cgColor
+        transitionCoverView.autoresizingMask = [.width, .height]
+        transitionCoverView.isHidden = true
+        addSubview(transitionCoverView)
+
         updateSwitcherAppearance()
     }
 
@@ -627,6 +638,52 @@ final class TouchBarRootView: NSView {
         )
         surfaceView.frame = contentFrame
         workspaceView.frame = contentFrame
+        transitionCoverView.frame = contentFrame
+    }
+
+    /// Snapshot the current mirror pixels and pin them above the live surface.
+    func beginSceneTransitionCover() {
+        transitionCoverTask?.cancel()
+        transitionCoverTask = nil
+        transitionCoverView.layer?.removeAllAnimations()
+        if let contents = surfaceView.currentFrameContents {
+            transitionCoverView.layer?.contents = contents
+        } else {
+            transitionCoverView.layer?.contents = nil
+        }
+        transitionCoverView.alphaValue = 1
+        transitionCoverView.isHidden = false
+        // Keep cover above surface / fallback workspace chrome.
+        addSubview(transitionCoverView, positioned: .above, relativeTo: nil)
+    }
+
+    /// After modal swap settles, fade the frozen frame out to reveal live capture.
+    func scheduleSceneTransitionCoverFade(
+        settle: Duration = MirrorSceneTransition.settleDuration,
+        fadeDuration: TimeInterval = MirrorSceneTransition.fadeDuration
+    ) {
+        transitionCoverTask?.cancel()
+        transitionCoverTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: settle)
+            guard !Task.isCancelled, let self else { return }
+            guard !self.transitionCoverView.isHidden else { return }
+
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = fadeDuration
+                    context.allowsImplicitAnimation = true
+                    self.transitionCoverView.animator().alphaValue = 0
+                }, completionHandler: {
+                    continuation.resume()
+                })
+            }
+
+            guard !Task.isCancelled else { return }
+            self.transitionCoverView.isHidden = true
+            self.transitionCoverView.layer?.contents = nil
+            self.transitionCoverView.alphaValue = 1
+            self.transitionCoverTask = nil
+        }
     }
 
     var mirrorViewportSize: CGSize {

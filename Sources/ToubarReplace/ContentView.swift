@@ -55,6 +55,15 @@ enum TouchBarIdleOpacity {
     static let delay: Duration = .seconds(5)
 }
 
+/// Mirror-window cover used while physical Touch Bar modals swap.
+/// Freezes the last captured frame, then fades out after a short settle.
+enum MirrorSceneTransition {
+    /// Keep the cover opaque while system modal + capture settle.
+    static let settleDuration: Duration = .milliseconds(221)
+    /// Fade-out of the frozen frame overlay.
+    static let fadeDuration: TimeInterval = 0.12
+}
+
 @MainActor
 final class TouchBarIdleOpacityController {
     private weak var window: NSWindow?
@@ -145,6 +154,11 @@ final class TouchBarSurfaceView: NSView {
         imageView.layer?.contents = image
         imageView.isHidden = false
         statusLabel.isHidden = true
+    }
+
+    /// Latest mirror bitmap (or nil before the first frame).
+    var currentFrameContents: Any? {
+        imageView.layer?.contents
     }
 
     func display(notice: TouchBarCaptureNotice) {
@@ -659,6 +673,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private func toggleWorkspace() {
         switch rootView.scene {
         case .mirror:
+            rootView.beginSceneTransitionCover()
             if lastFrontmostContext == nil {
                 lastFrontmostContext = FrontmostAppContext.capture()
             }
@@ -681,6 +696,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 )
                 rootView.setWorkspaceFallbackVisible(true)
                 presentPhysicalSwitcherIfNeeded()
+                rootView.scheduleSceneTransitionCoverFade()
                 return
             }
 
@@ -700,12 +716,14 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 workspaceTouchBarController.showIdle(lastPath: nil)
                 resolveWorkspacePath(refreshFrontmostContext: false)
             }
+            rootView.scheduleSceneTransitionCoverFade()
         case .workspace:
             closeWorkspace()
         }
     }
 
     private func closeWorkspace() {
+        rootView.beginSceneTransitionCover()
         finderSyncTask?.cancel()
         finderSyncTask = nil
         workspaceTouchBarController.dismiss()
@@ -716,10 +734,12 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
         presentPhysicalSwitcherIfNeeded()
+        rootView.scheduleSceneTransitionCoverFade()
     }
 
     private func handleWorkspacePresentationInterrupted() {
         guard rootView.scene == .workspace else { return }
+        rootView.beginSceneTransitionCover()
         finderSyncTask?.cancel()
         finderSyncTask = nil
         rootView.setWorkspaceFallbackVisible(false)
@@ -729,6 +749,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
         presentPhysicalSwitcherIfNeeded()
+        rootView.scheduleSceneTransitionCoverFade()
     }
 
     private func resolveWorkspacePath(refreshFrontmostContext: Bool) {

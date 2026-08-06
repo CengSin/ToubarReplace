@@ -64,6 +64,18 @@ enum ToubarReplaceSmokeTest {
             failures: &failures
         )
         expect(
+            MirrorSceneTransition.fadeDuration > 0
+                && MirrorSceneTransition.fadeDuration <= 0.3,
+            "mirror scene cover fade should be a short crossfade",
+            failures: &failures
+        )
+        expect(
+            MirrorSceneTransition.settleDuration > .milliseconds(0)
+                && MirrorSceneTransition.settleDuration <= .milliseconds(500),
+            "mirror scene cover settle should hide modal-swap glitches briefly",
+            failures: &failures
+        )
+        expect(
             WorkspacePresentationModePolicy.dismissalAction(
                 currentMode: "app",
                 workspaceMode: "app",

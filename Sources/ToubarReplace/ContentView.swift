@@ -916,4 +916,32 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             }
         )
     }
+
+    private func scheduleFinderPathSync() {
+        finderSyncTask?.cancel()
+        finderSyncTask = Task { @MainActor [weak self] in
+            for delay in [150, 300, 500] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard
+                    !Task.isCancelled,
+                    let self,
+                    self.isRunning,
+                    self.rootView.scene == .workspace
+                else {
+                    return
+                }
+                let frontmostContext = FrontmostAppContext.capture()
+                guard frontmostContext.isFinder else { return }
+                guard
+                    let context = self.workspacePathResolver
+                        .resolveFrontmostPath(from: frontmostContext)
+                else {
+                    continue
+                }
+                self.lastFrontmostContext = frontmostContext
+                self.acceptWorkspaceContext(context)
+                return
+            }
+        }
+    }
 }

@@ -6,7 +6,7 @@
 
 在桌面上镜像真实硬件 Touch Bar，并可选在物理 Touch Bar 上打开 Workspace，用触控直接选择项目路径、启动 Agent、打开常用 App。
 
-> 需要一台**带 Touch Bar** 的 Mac（macOS 14 及以上）。
+> 需要一台**带 Touch Bar** 的 Intel Mac（macOS 14 及以上）。
 
 ---
 

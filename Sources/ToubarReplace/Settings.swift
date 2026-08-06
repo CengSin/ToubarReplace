@@ -99,15 +99,13 @@ enum TouchBarPreferences {
 @MainActor
 final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelegate {
     private let positionPopup: NSPopUpButton
-    private let workspaceSidePopup: NSPopUpButton
+    private let switcherDisplayModePopup: NSPopUpButton
     private let terminalAdapterPopup: NSPopUpButton
     private let widthField: NSTextField
     private let heightField: NSTextField
     private let framesPerSecondField: NSTextField
-    private let workspaceFloatingSwitcherCheckbox: NSButton
     private let workspaceAutoCollapseCheckbox: NSButton
     private let onPositionChanged: (TouchBarDisplayPosition) -> Void
-    private let onWorkspaceSideChanged: (WorkspaceSwitcherSide) -> Void
     private let onWorkspaceFloatingSwitcherChanged: (Bool) -> Void
     private let onWorkspaceAutoCollapseChanged: (Bool) -> Void
     private let terminalAdapters: [TerminalAdapter]
@@ -135,28 +133,18 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         onWindowClosed: @escaping () -> Void
     ) {
         self.positionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        self.workspaceSidePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        self.terminalAdapterPopup = NSPopUpButton(
-            frame: .zero,
-            pullsDown: false
-        )
+        self.switcherDisplayModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        self.terminalAdapterPopup = NSPopUpButton(frame: .zero, pullsDown: false)
         self.widthField = NSTextField()
         self.heightField = NSTextField()
         self.framesPerSecondField = NSTextField()
-        self.workspaceFloatingSwitcherCheckbox = NSButton(
-            checkboxWithTitle: "切换按钮使用独立浮窗",
-            target: nil,
-            action: nil
-        )
         self.workspaceAutoCollapseCheckbox = NSButton(
             checkboxWithTitle: "启动 Agent 后自动返回镜像",
             target: nil,
             action: nil
         )
         self.onPositionChanged = onPositionChanged
-        self.onWorkspaceSideChanged = onWorkspaceSideChanged
-        self.onWorkspaceFloatingSwitcherChanged =
-            onWorkspaceFloatingSwitcherChanged
+        self.onWorkspaceFloatingSwitcherChanged = onWorkspaceFloatingSwitcherChanged
         self.onWorkspaceAutoCollapseChanged = onWorkspaceAutoCollapseChanged
         self.terminalAdapters = terminalAdapters
         self.onTerminalAdapterChanged = onTerminalAdapterChanged
@@ -164,47 +152,36 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         self.onFramesPerSecondChanged = onFramesPerSecondChanged
         self.onWindowClosed = onWindowClosed
 
-        let contentView = NSView(
-            frame: NSRect(x: 0, y: 0, width: 460, height: 475)
-        )
-        let titleLabel = NSTextField(
-            labelWithString: "Touch Bar 镜像设置"
-        )
+        // Keep side callback for API compatibility (attached rail removed).
+        _ = onWorkspaceSideChanged
+        _ = currentWorkspaceSide
+
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 420))
+        let titleLabel = NSTextField(labelWithString: "Touch Bar 镜像设置")
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
 
         let positionLabel = NSTextField(labelWithString: "展示位置")
-        positionPopup.addItems(
-            withTitles: TouchBarDisplayPosition.allCases.map(\.title)
+        positionPopup.addItems(withTitles: TouchBarDisplayPosition.allCases.map(\.title))
+        positionPopup.selectItem(
+            at: TouchBarDisplayPosition.allCases.firstIndex(of: currentPosition) ?? 0
         )
-        positionPopup.selectItem(at: TouchBarDisplayPosition.allCases.firstIndex(
-            of: currentPosition
-        ) ?? 0)
 
-        let workspaceSideLabel = NSTextField(labelWithString: "Workspace 入口")
-        workspaceSidePopup.addItems(
-            withTitles: WorkspaceSwitcherSide.allCases.map(\.title)
+        let switcherModeLabel = NSTextField(labelWithString: "切换按钮")
+        switcherDisplayModePopup.addItems(
+            withTitles: WorkspaceSwitcherDisplayMode.allCases.map(\.title)
         )
-        workspaceSidePopup.selectItem(
-            at: WorkspaceSwitcherSide.allCases.firstIndex(
-                of: currentWorkspaceSide
-            ) ?? 0
+        let currentMode: WorkspaceSwitcherDisplayMode =
+            currentWorkspaceSwitcherFloats ? .floating : .touchBar
+        switcherDisplayModePopup.selectItem(
+            at: WorkspaceSwitcherDisplayMode.allCases.firstIndex(of: currentMode) ?? 0
         )
-        workspaceFloatingSwitcherCheckbox.state = currentWorkspaceSwitcherFloats
-            ? .on
-            : .off
-        workspaceSidePopup.isEnabled = !currentWorkspaceSwitcherFloats
-        workspaceAutoCollapseCheckbox.state = currentWorkspaceAutoCollapse
-            ? .on
-            : .off
+
+        workspaceAutoCollapseCheckbox.state = currentWorkspaceAutoCollapse ? .on : .off
 
         let terminalAdapterLabel = NSTextField(labelWithString: "Claude 终端")
-        terminalAdapterPopup.addItems(
-            withTitles: terminalAdapters.map(\.displayName)
-        )
+        terminalAdapterPopup.addItems(withTitles: terminalAdapters.map(\.displayName))
         terminalAdapterPopup.selectItem(
-            at: terminalAdapters.firstIndex {
-                $0.id == currentTerminalAdapterID
-            } ?? 0
+            at: terminalAdapters.firstIndex { $0.id == currentTerminalAdapterID } ?? 0
         )
 
         let sizeLabel = NSTextField(labelWithString: "窗口像素")
@@ -236,30 +213,38 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         framesPerSecondField.integerValue = currentFramesPerSecond
 
         let hintLabel = NSTextField(
-            labelWithString: "画面来自一个持续运行的 Touch Bar 显示流，不再重复启动截图进程。默认 30 FPS；窗口像素会自动保存。"
+            labelWithString: "切换按钮二选一：物理 Touch Bar 可触摸，或使用独立浮窗。Workspace 模式下物理栏左侧有返回按钮。"
         )
         hintLabel.textColor = .secondaryLabelColor
-        hintLabel.maximumNumberOfLines = 2
+        hintLabel.maximumNumberOfLines = 3
         hintLabel.lineBreakMode = .byWordWrapping
 
         let positionRow = NSStackView(views: [positionLabel, positionPopup])
         positionRow.orientation = .horizontal
         positionRow.spacing = 12
         positionRow.alignment = .centerY
-        positionPopup.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        positionPopup.setContentCompressionResistancePriority(
-            .defaultHigh,
-            for: .horizontal
+
+        let switcherModeRow = NSStackView(views: [switcherModeLabel, switcherDisplayModePopup])
+        switcherModeRow.orientation = .horizontal
+        switcherModeRow.spacing = 12
+        switcherModeRow.alignment = .centerY
+
+        let workspaceAutoCollapseRow = NSStackView(
+            views: [NSTextField(labelWithString: ""), workspaceAutoCollapseCheckbox]
         )
+        workspaceAutoCollapseRow.orientation = .horizontal
+        workspaceAutoCollapseRow.spacing = 12
+        workspaceAutoCollapseRow.alignment = .centerY
+
+        let terminalAdapterRow = NSStackView(
+            views: [terminalAdapterLabel, terminalAdapterPopup]
+        )
+        terminalAdapterRow.orientation = .horizontal
+        terminalAdapterRow.spacing = 12
+        terminalAdapterRow.alignment = .centerY
 
         let sizeRow = NSStackView(
-            views: [
-                sizeLabel,
-                widthField,
-                multiplicationLabel,
-                heightField,
-                pixelsLabel,
-            ]
+            views: [sizeLabel, widthField, multiplicationLabel, heightField, pixelsLabel]
         )
         sizeRow.orientation = .horizontal
         sizeRow.spacing = 8
@@ -272,54 +257,11 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         framesPerSecondRow.spacing = 8
         framesPerSecondRow.alignment = .centerY
 
-        let workspaceSideRow = NSStackView(
-            views: [workspaceSideLabel, workspaceSidePopup]
-        )
-        workspaceSideRow.orientation = .horizontal
-        workspaceSideRow.spacing = 12
-        workspaceSideRow.alignment = .centerY
-        workspaceSidePopup.setContentHuggingPriority(
-            .defaultLow,
-            for: .horizontal
-        )
-
-        let workspaceFloatingSwitcherRow = NSStackView(
-            views: [
-                NSTextField(labelWithString: ""),
-                workspaceFloatingSwitcherCheckbox,
-            ]
-        )
-        workspaceFloatingSwitcherRow.orientation = .horizontal
-        workspaceFloatingSwitcherRow.spacing = 12
-        workspaceFloatingSwitcherRow.alignment = .centerY
-
-        let workspaceAutoCollapseRow = NSStackView(
-            views: [
-                NSTextField(labelWithString: ""),
-                workspaceAutoCollapseCheckbox,
-            ]
-        )
-        workspaceAutoCollapseRow.orientation = .horizontal
-        workspaceAutoCollapseRow.spacing = 12
-        workspaceAutoCollapseRow.alignment = .centerY
-
-        let terminalAdapterRow = NSStackView(
-            views: [terminalAdapterLabel, terminalAdapterPopup]
-        )
-        terminalAdapterRow.orientation = .horizontal
-        terminalAdapterRow.spacing = 12
-        terminalAdapterRow.alignment = .centerY
-        terminalAdapterPopup.setContentHuggingPriority(
-            .defaultLow,
-            for: .horizontal
-        )
-
         let stack = NSStackView(
             views: [
                 titleLabel,
                 positionRow,
-                workspaceFloatingSwitcherRow,
-                workspaceSideRow,
+                switcherModeRow,
                 workspaceAutoCollapseRow,
                 terminalAdapterRow,
                 sizeRow,
@@ -339,10 +281,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -24),
             positionLabel.widthAnchor.constraint(equalToConstant: 72),
-            workspaceFloatingSwitcherRow.arrangedSubviews[0].widthAnchor.constraint(
-                equalToConstant: 72
-            ),
-            workspaceSideLabel.widthAnchor.constraint(equalToConstant: 72),
+            switcherModeLabel.widthAnchor.constraint(equalToConstant: 72),
             workspaceAutoCollapseRow.arrangedSubviews[0].widthAnchor.constraint(
                 equalToConstant: 72
             ),
@@ -350,7 +289,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             sizeLabel.widthAnchor.constraint(equalToConstant: 72),
             framesPerSecondLabel.widthAnchor.constraint(equalToConstant: 72),
             positionPopup.widthAnchor.constraint(equalToConstant: 180),
-            workspaceSidePopup.widthAnchor.constraint(equalToConstant: 180),
+            switcherDisplayModePopup.widthAnchor.constraint(equalToConstant: 180),
             terminalAdapterPopup.widthAnchor.constraint(equalToConstant: 180),
             widthField.widthAnchor.constraint(equalToConstant: 90),
             heightField.widthAnchor.constraint(equalToConstant: 70),
@@ -373,16 +312,10 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         window.delegate = self
         positionPopup.target = self
         positionPopup.action = #selector(positionChanged(_:))
-        workspaceSidePopup.target = self
-        workspaceSidePopup.action = #selector(workspaceSideChanged(_:))
-        workspaceFloatingSwitcherCheckbox.target = self
-        workspaceFloatingSwitcherCheckbox.action = #selector(
-            workspaceFloatingSwitcherChanged(_:)
-        )
+        switcherDisplayModePopup.target = self
+        switcherDisplayModePopup.action = #selector(switcherDisplayModeChanged(_:))
         workspaceAutoCollapseCheckbox.target = self
-        workspaceAutoCollapseCheckbox.action = #selector(
-            workspaceAutoCollapseChanged(_:)
-        )
+        workspaceAutoCollapseCheckbox.action = #selector(workspaceAutoCollapseChanged(_:))
         terminalAdapterPopup.target = self
         terminalAdapterPopup.action = #selector(terminalAdapterChanged(_:))
         widthField.target = self
@@ -408,24 +341,17 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         guard TouchBarDisplayPosition.allCases.indices.contains(itemIndex) else {
             return
         }
-        let position = TouchBarDisplayPosition.allCases[itemIndex]
-        onPositionChanged(position)
+        onPositionChanged(TouchBarDisplayPosition.allCases[itemIndex])
     }
 
     @objc
-    private func workspaceSideChanged(_ sender: NSPopUpButton) {
+    private func switcherDisplayModeChanged(_ sender: NSPopUpButton) {
         let itemIndex = sender.indexOfSelectedItem
-        guard WorkspaceSwitcherSide.allCases.indices.contains(itemIndex) else {
+        guard WorkspaceSwitcherDisplayMode.allCases.indices.contains(itemIndex) else {
             return
         }
-        onWorkspaceSideChanged(WorkspaceSwitcherSide.allCases[itemIndex])
-    }
-
-    @objc
-    private func workspaceFloatingSwitcherChanged(_ sender: NSButton) {
-        let floats = sender.state == .on
-        workspaceSidePopup.isEnabled = !floats
-        onWorkspaceFloatingSwitcherChanged(floats)
+        let mode = WorkspaceSwitcherDisplayMode.allCases[itemIndex]
+        onWorkspaceFloatingSwitcherChanged(mode == .floating)
     }
 
     @objc
@@ -458,10 +384,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
     @objc
     private func framesPerSecondChanged(_ sender: NSTextField) {
         let framesPerSecond = min(
-            max(
-                sender.integerValue,
-                TouchBarCapture.minimumFramesPerSecond
-            ),
+            max(sender.integerValue, TouchBarCapture.minimumFramesPerSecond),
             TouchBarCapture.maximumFramesPerSecond
         )
         framesPerSecondField.integerValue = framesPerSecond

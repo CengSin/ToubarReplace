@@ -16,11 +16,27 @@ enum WorkspaceSwitcherSide: String, CaseIterable {
     }
 }
 
+enum WorkspaceSwitcherDisplayMode: String, CaseIterable {
+    case touchBar
+    case floating
+
+    var title: String {
+        switch self {
+        case .touchBar:
+            return "物理 Touch Bar"
+        case .floating:
+            return "独立浮窗"
+        }
+    }
+}
+
 enum WorkspacePreferences {
     private static let switcherSideKey =
         "ToubarReplace.workspace.switcherSide"
     private static let floatingSwitcherKey =
         "ToubarReplace.workspace.floatingSwitcher"
+    private static let switcherDisplayModeKey =
+        "ToubarReplace.workspace.switcherDisplayMode"
     private static let autoCollapseKey =
         "ToubarReplace.workspace.autoCollapse"
     private static let lastPathKey = "ToubarReplace.workspace.lastPath"
@@ -48,18 +64,43 @@ enum WorkspacePreferences {
         }
     }
 
-    static var floatingSwitcher: Bool {
+    /// Preferred location of the Workspace switcher button.
+    /// `.touchBar` shows a real touchable button on the hardware Touch Bar.
+    /// `.floating` shows the independent floating window only.
+    static var switcherDisplayMode: WorkspaceSwitcherDisplayMode {
         get {
-            guard
-                UserDefaults.standard.object(forKey: floatingSwitcherKey) != nil
-            else {
-                return true
+            if let rawValue = UserDefaults.standard.string(
+                forKey: switcherDisplayModeKey
+            ),
+                let mode = WorkspaceSwitcherDisplayMode(rawValue: rawValue)
+            {
+                return mode
             }
-            return UserDefaults.standard.bool(forKey: floatingSwitcherKey)
+            // Migrate from the older floatingSwitcher bool.
+            if UserDefaults.standard.object(forKey: floatingSwitcherKey) != nil {
+                return UserDefaults.standard.bool(forKey: floatingSwitcherKey)
+                    ? .floating
+                    : .touchBar
+            }
+            return .touchBar
         }
         set {
-            UserDefaults.standard.set(newValue, forKey: floatingSwitcherKey)
+            UserDefaults.standard.set(
+                newValue.rawValue,
+                forKey: switcherDisplayModeKey
+            )
+            // Keep the legacy key in sync for any remaining call sites.
+            UserDefaults.standard.set(
+                newValue == .floating,
+                forKey: floatingSwitcherKey
+            )
         }
+    }
+
+    /// Legacy compatibility: true means floating window mode.
+    static var floatingSwitcher: Bool {
+        get { switcherDisplayMode == .floating }
+        set { switcherDisplayMode = newValue ? .floating : .touchBar }
     }
 
     static var autoCollapse: Bool {
@@ -737,10 +778,6 @@ final class AgentRegistry {
             let path = candidate.standardizedFileURL.path
             guard visited.insert(path).inserted else { continue }
             if fileManager.isExecutableFile(atPath: path) {
-                // Keep the launcher path instead of resolving a Node shim to
-                // its JavaScript target. The launcher's bin directory is
-                // prepended to PATH so `/usr/bin/env node` can find the
-                // matching runtime even when ToubarReplace starts from Finder.
                 return candidate.standardizedFileURL
             }
         }
@@ -870,10 +907,6 @@ final class AgentLauncher {
 
         try process.run()
 
-        // 仅等待一小段时间，确认进程没有立刻崩溃退出
-        // （比如可执行文件缺失、参数错误导致秒退）
-        // 不再等待进程完全跑完——像 Claude Code / Cursor 这类长期驻留的
-        // 交互式进程，不会自己退出，等它退出可能是几分钟甚至永远不退出。
         try? await Task.sleep(for: .milliseconds(300))
         guard process.isRunning else {
             guard process.terminationStatus == 0 else {
@@ -882,9 +915,8 @@ final class AgentLauncher {
                     status: process.terminationStatus
                 )
             }
-            return // 进程退出且状态 0，视为成功启动（极少见）
+            return
         }
-        // 否则进程还活着，视为正常启动成功
     }
 }
 

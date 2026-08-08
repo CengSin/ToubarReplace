@@ -696,7 +696,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             availableAgents = []
             rootView.setScene(.workspace)
             workspaceSwitcherWindowController?.switcherView.setScene(.workspace)
-            idleOpacityController.suspendAtFullOpacity()
+            // Same 5s idle opacity as mirror: full while active, 30% after quiet frames.
+            idleOpacityController.resumeFrameDrivenOpacity()
 
             switcherTouchBarController.dismiss()
 

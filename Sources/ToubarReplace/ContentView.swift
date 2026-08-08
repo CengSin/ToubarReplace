@@ -249,8 +249,10 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         panel.isOpaque = true
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true
-        panel.ignoresMouseEvents = false
+        // Pure display: mouse events pass through to apps behind the mirror.
+        // Reposition via settings (display position / custom coordinates), not drag.
+        panel.isMovableByWindowBackground = false
+        panel.ignoresMouseEvents = true
         panel.becomesKeyOnlyIfNeeded = true
         panel.minSize = TouchBarWindowMetrics.rootSize(
             forMirrorSize: TouchBarWindowMetrics.minimumSize,

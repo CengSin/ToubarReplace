@@ -6,21 +6,6 @@ enum BarScene {
 }
 
 @MainActor
-final class WorkspaceActionButton: NSButton {
-    var onMouseDown: (() -> Void)?
-
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-        true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        onMouseDown?()
-        super.mouseDown(with: event)
-    }
-
-}
-
-@MainActor
 final class WorkspaceFloatingSwitcherView: NSView {
     enum Gesture {
         static let maximumClickDuration: TimeInterval = 0.35
@@ -307,8 +292,6 @@ final class WorkspaceBarView: NSView {
     private let pathAgentsDivider = NSView()
     private let agentsCustomDivider = NSView()
     private var context: WorkspaceContext?
-    private var agentCount = 0
-    private var customAppCount = 0
 
     var onResolvePath: (() -> Void)?
     var onAgentActivated: ((AvailableAgent) -> Void)? {
@@ -376,9 +359,7 @@ final class WorkspaceBarView: NSView {
     }
 
     func reloadCustomAppsFromPreferences() {
-        let apps = WorkspacePreferences.customApps
-        customAppCount = apps.count
-        customAppsView.display(apps: apps)
+        customAppsView.display(apps: WorkspacePreferences.customApps)
         needsLayout = true
     }
 
@@ -451,7 +432,6 @@ final class WorkspaceBarView: NSView {
 
     func showIdle(lastPath: URL?) {
         context = nil
-        agentCount = 0
         if let lastPath {
             pathView.display(
                 image: WorkspaceTouchBarStyle.symbol(
@@ -479,7 +459,6 @@ final class WorkspaceBarView: NSView {
 
     func showResolving() {
         context = nil
-        agentCount = 0
         pathView.display(
             image: WorkspaceTouchBarStyle.symbol(
                 named: "hourglass",
@@ -498,7 +477,6 @@ final class WorkspaceBarView: NSView {
         agents: [AvailableAgent]
     ) {
         self.context = context
-        agentCount = agents.count
         pathView.display(
             image: WorkspaceTouchBarStyle.symbol(
                 named: "folder",
@@ -536,7 +514,6 @@ final class WorkspaceBarView: NSView {
         agents: [AvailableAgent]
     ) {
         self.context = context
-        agentCount = context == nil ? 0 : agents.count
         pathView.display(
             image: nil,
             title: message,
@@ -554,42 +531,19 @@ final class WorkspaceBarView: NSView {
 final class TouchBarRootView: NSView {
     let surfaceView: TouchBarSurfaceView
     let workspaceView: WorkspaceBarView
-    private let switcherButton = WorkspaceActionButton()
     /// Freezes the last mirror frame over the viewport during scene switches.
     private let transitionCoverView = NSView(frame: .zero)
     private var transitionCoverTask: Task<Void, Never>?
     private(set) var scene: BarScene = .mirror
-    private(set) var switcherSide: WorkspaceSwitcherSide
-    private(set) var showsAttachedSwitcher: Bool
     private var showsWorkspaceFallback = false
 
-    var onSwitcherMouseDown: (() -> Void)?
-    var onToggleScene: (() -> Void)?
-
-    init(
-        frame frameRect: NSRect,
-        switcherSide: WorkspaceSwitcherSide,
-        showsAttachedSwitcher: Bool
-    ) {
-        self.switcherSide = switcherSide
-        self.showsAttachedSwitcher = showsAttachedSwitcher
+    override init(frame frameRect: NSRect) {
         surfaceView = TouchBarSurfaceView(frame: .zero)
         workspaceView = WorkspaceBarView(frame: .zero)
         super.init(frame: frameRect)
         autoresizingMask = [.width, .height]
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
-
-        switcherButton.isBordered = false
-        switcherButton.imagePosition = .imageOnly
-        switcherButton.contentTintColor = .white
-        switcherButton.target = self
-        switcherButton.action = #selector(toggleScene)
-        switcherButton.onMouseDown = { [weak self] in
-            self?.onSwitcherMouseDown?()
-        }
-        addSubview(switcherButton)
-        switcherButton.isHidden = !showsAttachedSwitcher
 
         surfaceView.autoresizingMask = [.width, .height]
         addSubview(surfaceView)
@@ -603,8 +557,6 @@ final class TouchBarRootView: NSView {
         transitionCoverView.autoresizingMask = [.width, .height]
         transitionCoverView.isHidden = true
         addSubview(transitionCoverView)
-
-        updateSwitcherAppearance()
     }
 
     @available(*, unavailable)
@@ -618,32 +570,7 @@ final class TouchBarRootView: NSView {
 
     override func layout() {
         super.layout()
-        let railWidth = showsAttachedSwitcher
-            ? min(TouchBarWindowMetrics.edgeRailWidth, bounds.width)
-            : 0
-        let contentWidth = max(bounds.width - railWidth, 0)
-        let railX: CGFloat
-        let contentX: CGFloat
-        switch switcherSide {
-        case .left:
-            railX = 0
-            contentX = railWidth
-        case .right:
-            railX = contentWidth
-            contentX = 0
-        }
-        switcherButton.frame = NSRect(
-            x: railX,
-            y: 0,
-            width: railWidth,
-            height: bounds.height
-        )
-        let contentFrame = NSRect(
-            x: contentX,
-            y: 0,
-            width: contentWidth,
-            height: bounds.height
-        )
+        let contentFrame = bounds
         surfaceView.frame = contentFrame
         workspaceView.frame = contentFrame
         transitionCoverView.frame = contentFrame
@@ -696,10 +623,7 @@ final class TouchBarRootView: NSView {
 
     var mirrorViewportSize: CGSize {
         CGSize(
-            width: max(
-                bounds.width - attachedSwitcherWidth,
-                1
-            ),
+            width: max(bounds.width, 1),
             height: max(bounds.height, 1)
         )
     }
@@ -707,7 +631,6 @@ final class TouchBarRootView: NSView {
     func setScene(_ scene: BarScene) {
         self.scene = scene
         updateContentVisibility()
-        updateSwitcherAppearance()
     }
 
     func setWorkspaceFallbackVisible(_ visible: Bool) {
@@ -715,46 +638,9 @@ final class TouchBarRootView: NSView {
         updateContentVisibility()
     }
 
-    func setSwitcherSide(_ side: WorkspaceSwitcherSide) {
-        switcherSide = side
-        needsLayout = true
-    }
-
-    func setAttachedSwitcherVisible(_ visible: Bool) {
-        showsAttachedSwitcher = visible
-        switcherButton.isHidden = !visible
-        needsLayout = true
-    }
-
-    private var attachedSwitcherWidth: CGFloat {
-        showsAttachedSwitcher ? TouchBarWindowMetrics.edgeRailWidth : 0
-    }
-
-    private func updateSwitcherAppearance() {
-        switch scene {
-        case .mirror:
-            switcherButton.image = NSImage(
-                systemSymbolName: "square.grid.2x2",
-                accessibilityDescription: "打开 Workspace"
-            )
-            switcherButton.toolTip = "打开 Workspace"
-        case .workspace:
-            switcherButton.image = NSImage(
-                systemSymbolName: "chevron.backward",
-                accessibilityDescription: "返回 Touch Bar 镜像"
-            )
-            switcherButton.toolTip = "返回 Touch Bar 镜像"
-        }
-    }
-
     private func updateContentVisibility() {
         let showFallback = scene == .workspace && showsWorkspaceFallback
         surfaceView.isHidden = showFallback
         workspaceView.isHidden = !showFallback
-    }
-
-    @objc
-    private func toggleScene() {
-        onToggleScene?()
     }
 }

@@ -2,20 +2,6 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-enum WorkspaceSwitcherSide: String, CaseIterable {
-    case left
-    case right
-
-    var title: String {
-        switch self {
-        case .left:
-            return "左侧（默认）"
-        case .right:
-            return "右侧"
-        }
-    }
-}
-
 enum WorkspaceSwitcherDisplayMode: String, CaseIterable {
     case touchBar
     case floating
@@ -31,8 +17,6 @@ enum WorkspaceSwitcherDisplayMode: String, CaseIterable {
 }
 
 enum WorkspacePreferences {
-    private static let switcherSideKey =
-        "ToubarReplace.workspace.switcherSide"
     private static let floatingSwitcherKey =
         "ToubarReplace.workspace.floatingSwitcher"
     private static let switcherDisplayModeKey =
@@ -40,29 +24,8 @@ enum WorkspacePreferences {
     private static let autoCollapseKey =
         "ToubarReplace.workspace.autoCollapse"
     private static let lastPathKey = "ToubarReplace.workspace.lastPath"
-    private static let rootFrameMigratedKey =
-        "ToubarReplace.workspace.rootFrameMigrated"
-    private static let floatingMirrorFrameMigratedKey =
-        "ToubarReplace.workspace.floatingMirrorFrameMigrated"
     private static let terminalAdapterKey =
         "ToubarReplace.workspace.terminalAdapter"
-
-    static var switcherSide: WorkspaceSwitcherSide {
-        get {
-            guard
-                let rawValue = UserDefaults.standard.string(
-                    forKey: switcherSideKey
-                ),
-                let side = WorkspaceSwitcherSide(rawValue: rawValue)
-            else {
-                return .left
-            }
-            return side
-        }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: switcherSideKey)
-        }
-    }
 
     /// Preferred location of the Workspace switcher button.
     /// `.touchBar` shows a real touchable button on the hardware Touch Bar.
@@ -89,15 +52,10 @@ enum WorkspacePreferences {
                 newValue.rawValue,
                 forKey: switcherDisplayModeKey
             )
-            // Keep the legacy key in sync for any remaining call sites.
-            UserDefaults.standard.set(
-                newValue == .floating,
-                forKey: floatingSwitcherKey
-            )
         }
     }
 
-    /// Legacy compatibility: true means floating window mode.
+    /// Convenience: true means floating window mode.
     static var floatingSwitcher: Bool {
         get { switcherDisplayMode == .floating }
         set { switcherDisplayMode = newValue ? .floating : .touchBar }
@@ -130,27 +88,6 @@ enum WorkspacePreferences {
         }
         set {
             UserDefaults.standard.set(newValue?.path, forKey: lastPathKey)
-        }
-    }
-
-    static var hasMigratedRootFrame: Bool {
-        get {
-            UserDefaults.standard.bool(forKey: rootFrameMigratedKey)
-        }
-        set {
-            UserDefaults.standard.set(newValue, forKey: rootFrameMigratedKey)
-        }
-    }
-
-    static var hasMigratedFloatingMirrorFrame: Bool {
-        get {
-            UserDefaults.standard.bool(forKey: floatingMirrorFrameMigratedKey)
-        }
-        set {
-            UserDefaults.standard.set(
-                newValue,
-                forKey: floatingMirrorFrameMigratedKey
-            )
         }
     }
 

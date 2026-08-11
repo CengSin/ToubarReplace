@@ -17,7 +17,7 @@ enum WorkspaceTouchBarLayout {
 
     /// Preferred Workspace item size in points from mirror settings (pixels ÷ scale),
     /// clamped to ``[minimumContentWidth, maximumContentWidth]``.
-    /// Default mirror `2300×70` @2x → width capped to `1050`, height `35`
+    /// Default mirror `2300×70` @2x → width capped to `1010`, height `35`
     /// (height is only used by the mirror window; TB chrome stays 30pt).
     static func preferredContentSize(
         mirrorPixelSize: CGSize = TouchBarPreferences.mirrorPixelSize,
@@ -78,34 +78,6 @@ enum WorkspaceTouchBarLayout {
     /// Extra right pad inside the tray so the last custom slot (+ / app) is not
     /// clipped by system Function Row chrome.
     static let trayTrailingSafeInset: CGFloat = 6
-
-    static func centeredControlFrame(
-        in region: NSRect,
-        preferredWidth: CGFloat
-    ) -> NSRect {
-        let width = min(max(preferredWidth, 0), region.width)
-        let height = min(WorkspaceTouchBarStyle.controlHeight, region.height)
-        return NSRect(
-            x: region.midX - width / 2,
-            y: region.midY - height / 2,
-            width: width,
-            height: height
-        )
-    }
-
-    static func leadingControlFrame(
-        in region: NSRect,
-        preferredWidth: CGFloat
-    ) -> NSRect {
-        let width = min(max(preferredWidth, 0), region.width)
-        let height = min(WorkspaceTouchBarStyle.controlHeight, region.height)
-        return NSRect(
-            x: region.minX,
-            y: region.midY - height / 2,
-            width: width,
-            height: height
-        )
-    }
 
     /// Path *zone* width: design 4/10 of the usable tray × ``pathRegionScale``,
     /// then grow if `pathPreferredWidth` (plate hug) needs more room so the
@@ -289,17 +261,13 @@ enum WorkspaceTouchBarLayout {
     /// the return button is in the same view.
     static func regionFrames(
         in bounds: NSRect,
-        agentCount: Int = 0,
-        customAppCount: Int = 0,
         pathPreferredWidth: CGFloat = 0
     ) -> (
         path: NSRect,
         agents: NSRect,
         custom: NSRect
     ) {
-        _ = agentCount
-        _ = customAppCount
-        return trayZoneFrames(
+        trayZoneFrames(
             tray: bounds,
             pathPreferredWidth: pathPreferredWidth
         )
@@ -647,7 +615,6 @@ final class WorkspaceTouchBarContentView: NSView {
     private let pathAgentsDivider = NSView()
     private let agentsCustomDivider = NSView()
     private let agentsPlaceholder = NSTextField(labelWithString: "")
-    private var customAppCount = 0
 
     var onWindowAttachmentChanged: ((Bool) -> Void)?
     var onToggleWorkspace: (() -> Void)?
@@ -717,14 +684,7 @@ final class WorkspaceTouchBarContentView: NSView {
         onWindowAttachmentChanged?(window != nil)
     }
 
-    func updateRegionMetrics(
-        agentCount: Int,
-        customAppCount: Int,
-        pathPreferredWidth: CGFloat? = nil
-    ) {
-        _ = agentCount
-        _ = pathPreferredWidth
-        self.customAppCount = max(0, customAppCount)
+    func setNeedsRegionLayout() {
         needsLayout = true
     }
 
@@ -1219,10 +1179,7 @@ final class WorkspaceTouchBarController: NSObject, NSTouchBarDelegate {
     func reloadCustomAppsFromPreferences() {
         customApps = WorkspacePreferences.customApps
         customAppsView.display(apps: customApps)
-        contentView.updateRegionMetrics(
-            agentCount: agents.count,
-            customAppCount: customApps.count
-        )
+        contentView.setNeedsRegionLayout()
     }
 
     func present() throws {
@@ -1389,7 +1346,7 @@ final class WorkspaceTouchBarController: NSObject, NSTouchBarDelegate {
             equalToConstant: WorkspaceTouchBarStyle.controlHeight
         ).isActive = true
         // Width tracks Settings mirror points, capped to maximumContentWidth
-        // (1050). Asking for the full mirror point size (~1150) overflows the
+        // (1010). Asking for the full mirror point size (~1150) overflows the
         // Function Row and clips the trailing custom slot.
         let preferredWidthValue = WorkspaceTouchBarLayout.preferredContentWidth()
         let minWidth = contentView.widthAnchor.constraint(
@@ -1412,10 +1369,7 @@ final class WorkspaceTouchBarController: NSObject, NSTouchBarDelegate {
         agentsEnabled = enabled && !agents.isEmpty
         agentIconRow.setEnabled(agentsEnabled)
         contentView.showAgentsPlaceholder(placeholder)
-        contentView.updateRegionMetrics(
-            agentCount: agents.isEmpty ? 0 : agents.count,
-            customAppCount: customApps.count
-        )
+        contentView.setNeedsRegionLayout()
     }
 
     private func handleWindowAttachmentChanged(_ attached: Bool) {

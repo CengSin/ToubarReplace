@@ -4,7 +4,6 @@ import CoreGraphics
 struct TouchBarWindowMetrics {
     static let defaultSize = CGSize(width: 1_150, height: 35)
     static let minimumSize = CGSize(width: 240, height: 18)
-    static let edgeRailWidth: CGFloat = 36
 
     static func pointSize(
         forPixelSize pixelSize: CGSize,
@@ -28,23 +27,11 @@ struct TouchBarWindowMetrics {
         )
     }
 
-    static func rootSize(
-        forMirrorSize mirrorSize: CGSize,
-        edgeRailWidth: CGFloat = TouchBarWindowMetrics.edgeRailWidth
-    ) -> CGSize {
+    /// Root panel size equals the mirror viewport (no attached switcher rail).
+    static func rootSize(forMirrorSize mirrorSize: CGSize) -> CGSize {
         CGSize(
-            width: max(mirrorSize.width, 1) + max(edgeRailWidth, 0),
+            width: max(mirrorSize.width, 1),
             height: max(mirrorSize.height, 1)
-        )
-    }
-
-    static func mirrorSize(
-        forRootSize rootSize: CGSize,
-        edgeRailWidth: CGFloat = TouchBarWindowMetrics.edgeRailWidth
-    ) -> CGSize {
-        CGSize(
-            width: max(rootSize.width - max(edgeRailWidth, 0), 1),
-            height: max(rootSize.height, 1)
         )
     }
 }
@@ -68,7 +55,6 @@ enum MirrorSceneTransition {
 final class TouchBarIdleOpacityController {
     private weak var window: NSWindow?
     private var idleTask: Task<Void, Never>?
-    private var isSuspended = false
 
     init(window: NSWindow) {
         self.window = window
@@ -86,24 +72,11 @@ final class TouchBarIdleOpacityController {
     func registerFrameActivity() {
         idleTask?.cancel()
         window?.alphaValue = TouchBarIdleOpacity.active
-        guard !isSuspended else { return }
         idleTask = Task { [weak self] in
             try? await Task.sleep(for: TouchBarIdleOpacity.delay)
             guard !Task.isCancelled else { return }
             self?.window?.alphaValue = TouchBarIdleOpacity.idle
         }
-    }
-
-    func suspendAtFullOpacity() {
-        isSuspended = true
-        idleTask?.cancel()
-        idleTask = nil
-        window?.alphaValue = TouchBarIdleOpacity.active
-    }
-
-    func resumeFrameDrivenOpacity() {
-        isSuspended = false
-        registerFrameActivity()
     }
 }
 
@@ -224,16 +197,12 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             forPixelSize: TouchBarPreferences.mirrorPixelSize,
             backingScaleFactor: scale
         )
-        // Switcher is either physical Touch Bar or floating window — never attached rail.
+        // Switcher is either physical Touch Bar or floating window (no attached rail).
         let initialRootSize = TouchBarWindowMetrics.rootSize(
-            forMirrorSize: initialMirrorSize,
-            edgeRailWidth: 0
+            forMirrorSize: initialMirrorSize
         )
-        let switcherSide = WorkspacePreferences.switcherSide
         rootView = TouchBarRootView(
-            frame: NSRect(origin: .zero, size: initialRootSize),
-            switcherSide: switcherSide,
-            showsAttachedSwitcher: false
+            frame: NSRect(origin: .zero, size: initialRootSize)
         )
 
         let panel = NSPanel(
@@ -255,8 +224,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         panel.ignoresMouseEvents = true
         panel.becomesKeyOnlyIfNeeded = true
         panel.minSize = TouchBarWindowMetrics.rootSize(
-            forMirrorSize: TouchBarWindowMetrics.minimumSize,
-            edgeRailWidth: 0
+            forMirrorSize: TouchBarWindowMetrics.minimumSize
         )
         panel.animationBehavior = .none
         panel.titleVisibility = .hidden
@@ -271,8 +239,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             )
         }
         panel.setContentSize(initialRootSize)
-        WorkspacePreferences.hasMigratedRootFrame = true
-        WorkspacePreferences.hasMigratedFloatingMirrorFrame = true
 
         let idleOpacityController = TouchBarIdleOpacityController(window: panel)
         self.idleOpacityController = idleOpacityController
@@ -355,8 +321,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 )
                 window.setContentSize(
                     TouchBarWindowMetrics.rootSize(
-                        forMirrorSize: mirrorPointSize,
-                        edgeRailWidth: 0
+                        forMirrorSize: mirrorPointSize
                     )
                 )
                 return
@@ -435,26 +400,10 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         )
         let mirrorOriginX = currentMirrorOriginX
         window.setContentSize(
-            TouchBarWindowMetrics.rootSize(
-                forMirrorSize: mirrorPointSize,
-                edgeRailWidth: 0
-            )
+            TouchBarWindowMetrics.rootSize(forMirrorSize: mirrorPointSize)
         )
         setWindowOriginPreservingMirrorX(mirrorOriginX)
         persistCurrentPixelSize()
-    }
-
-    var workspaceSwitcherSide: WorkspaceSwitcherSide {
-        rootView.switcherSide
-    }
-
-    func setWorkspaceSwitcherSide(_ side: WorkspaceSwitcherSide) {
-        guard side != rootView.switcherSide else { return }
-        let mirrorOriginX = currentMirrorOriginX
-        WorkspacePreferences.switcherSide = side
-        rootView.setSwitcherSide(side)
-        rootView.layoutSubtreeIfNeeded()
-        setWindowOriginPreservingMirrorX(mirrorOriginX)
     }
 
     var workspaceSwitcherFloats: Bool {
@@ -472,7 +421,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     func setWorkspaceSwitcherDisplayMode(_ mode: WorkspaceSwitcherDisplayMode) {
         guard mode != WorkspacePreferences.switcherDisplayMode else { return }
         WorkspacePreferences.switcherDisplayMode = mode
-        rootView.setAttachedSwitcherVisible(false)
         configureFloatingWorkspaceSwitcher()
         showFloatingWorkspaceSwitcherIfNeeded()
         if mode == .floating {
@@ -567,8 +515,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             backingScaleFactor: scale
         )
         let rootSize = TouchBarWindowMetrics.rootSize(
-            forMirrorSize: mirrorPointSize,
-            edgeRailWidth: 0
+            forMirrorSize: mirrorPointSize
         )
         let mirrorX = visibleFrame.midX - mirrorPointSize.width / 2
         let bottomY = screen?.frame.minY ?? 0
@@ -605,12 +552,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         }
         rootView.workspaceView.onOpenCustomApp = { [weak self] app in
             self?.openCustomWorkspaceApp(app)
-        }
-        rootView.onSwitcherMouseDown = { [weak self] in
-            self?.lastFrontmostContext = FrontmostAppContext.capture()
-        }
-        rootView.onToggleScene = { [weak self] in
-            self?.toggleWorkspace()
         }
         workspaceTouchBarController.onResolvePath = { [weak self] in
             self?.chooseWorkspacePath()
@@ -699,7 +640,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             rootView.setScene(.workspace)
             workspaceSwitcherWindowController?.switcherView.setScene(.workspace)
             // Same 5s idle opacity as mirror: full while active, 30% after quiet frames.
-            idleOpacityController.resumeFrameDrivenOpacity()
+            idleOpacityController.registerFrameActivity()
 
             switcherTouchBarController.dismiss()
 
@@ -748,7 +689,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         rootView.setWorkspaceFallbackVisible(false)
         rootView.setScene(.mirror)
         workspaceSwitcherWindowController?.switcherView.setScene(.mirror)
-        idleOpacityController.resumeFrameDrivenOpacity()
+        idleOpacityController.registerFrameActivity()
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
         presentPhysicalSwitcherIfNeeded()
@@ -763,7 +704,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         rootView.setWorkspaceFallbackVisible(false)
         rootView.setScene(.mirror)
         workspaceSwitcherWindowController?.switcherView.setScene(.mirror)
-        idleOpacityController.resumeFrameDrivenOpacity()
+        idleOpacityController.registerFrameActivity()
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
         presentPhysicalSwitcherIfNeeded()

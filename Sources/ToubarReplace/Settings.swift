@@ -163,14 +163,12 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         currentCustomTopLeft: CGPoint,
         currentPixelSize: CGSize,
         currentFramesPerSecond: Int,
-        currentWorkspaceSide: WorkspaceSwitcherSide,
         currentWorkspaceSwitcherFloats: Bool,
         currentWorkspaceAutoCollapse: Bool,
         terminalAdapters: [TerminalAdapter],
         currentTerminalAdapterID: TerminalAdapterID,
         onPositionChanged: @escaping (TouchBarDisplayPosition) -> Void,
         onCustomTopLeftChanged: @escaping (CGPoint) -> Void,
-        onWorkspaceSideChanged: @escaping (WorkspaceSwitcherSide) -> Void,
         onWorkspaceFloatingSwitcherChanged: @escaping (Bool) -> Void,
         onWorkspaceAutoCollapseChanged: @escaping (Bool) -> Void,
         onTerminalAdapterChanged: @escaping (TerminalAdapterID) -> Void,
@@ -200,10 +198,6 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         self.onPixelSizeChanged = onPixelSizeChanged
         self.onFramesPerSecondChanged = onFramesPerSecondChanged
         self.onWindowClosed = onWindowClosed
-
-        // Keep side callback for API compatibility (attached rail removed).
-        _ = onWorkspaceSideChanged
-        _ = currentWorkspaceSide
 
         let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 500))
         let titleLabel = NSTextField(labelWithString: "Touch Bar 镜像设置")

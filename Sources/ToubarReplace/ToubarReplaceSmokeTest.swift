@@ -27,34 +27,18 @@ enum ToubarReplaceSmokeTest {
             "point-to-pixel conversion changed unexpectedly",
             failures: &failures
         )
-        let workspaceRootSize = TouchBarWindowMetrics.rootSize(
-            forMirrorSize: TouchBarWindowMetrics.defaultSize
-        )
         expect(
-            workspaceRootSize == CGSize(width: 1_186, height: 35),
-            "Workspace rail must extend rather than shrink the mirror viewport",
-            failures: &failures
-        )
-        expect(
-            TouchBarWindowMetrics.mirrorSize(
-                forRootSize: workspaceRootSize
+            TouchBarWindowMetrics.rootSize(
+                forMirrorSize: TouchBarWindowMetrics.defaultSize
             ) == TouchBarWindowMetrics.defaultSize,
-            "Workspace root-to-mirror conversion must round-trip",
+            "mirror root size equals viewport (no attached switcher rail)",
             failures: &failures
         )
         expect(
             TouchBarWindowMetrics.rootSize(
                 forMirrorSize: TouchBarWindowMetrics.minimumSize
-            ).width == TouchBarWindowMetrics.minimumSize.width + 36,
-            "minimum root width must reserve the Workspace rail",
-            failures: &failures
-        )
-        expect(
-            TouchBarWindowMetrics.rootSize(
-                forMirrorSize: TouchBarWindowMetrics.defaultSize,
-                edgeRailWidth: 0
-            ) == TouchBarWindowMetrics.defaultSize,
-            "floating Workspace switcher must not change the mirror window size",
+            ) == TouchBarWindowMetrics.minimumSize,
+            "minimum root size equals minimum mirror size",
             failures: &failures
         )
         expect(
@@ -204,7 +188,7 @@ enum ToubarReplaceSmokeTest {
             backingScaleFactor: 2
         )
         // Mirror default 2300×70 @2x → 1150×35 points, but item width is capped
-        // to maximumContentWidth (1050) so trailing custom slots are not clipped.
+        // to maximumContentWidth (1010) so trailing custom slots are not clipped.
         expect(
             abs(
                 settingsPreferred.width
@@ -535,11 +519,6 @@ enum ToubarReplaceSmokeTest {
                 distance: 12
             ),
             "long presses and drags must not toggle Workspace",
-            failures: &failures
-        )
-        expect(
-            WorkspaceSwitcherSide.allCases == [.left, .right],
-            "Workspace switcher side ordering changed unexpectedly",
             failures: &failures
         )
         expect(

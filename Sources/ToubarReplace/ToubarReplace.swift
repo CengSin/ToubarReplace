@@ -102,8 +102,6 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                     ?? TouchBarPreferences.mirrorPixelSize,
                 currentFramesPerSecond: windowController?.displayFramesPerSecond
                     ?? TouchBarPreferences.displayFramesPerSecond,
-                currentWorkspaceSide: windowController?.workspaceSwitcherSide
-                    ?? WorkspacePreferences.switcherSide,
                 currentWorkspaceSwitcherFloats:
                     windowController?.workspaceSwitcherFloats
                     ?? WorkspacePreferences.floatingSwitcher,
@@ -125,9 +123,6 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                 },
                 onCustomTopLeftChanged: { [weak self] topLeft in
                     self?.windowController?.setCustomTopLeft(topLeft)
-                },
-                onWorkspaceSideChanged: { [weak self] side in
-                    self?.windowController?.setWorkspaceSwitcherSide(side)
                 },
                 onWorkspaceFloatingSwitcherChanged: { [weak self] floats in
                     self?.windowController?.setWorkspaceSwitcherFloats(floats)

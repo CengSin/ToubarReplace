@@ -118,7 +118,7 @@ enum ToubarReplaceSmokeTest {
             "Workspace custom apps must cap at three favorites",
             failures: &failures
         )
-        let fifoSeed = [
+        let pinSeed = [
             CustomWorkspaceApp(
                 bundleIdentifier: "a.one",
                 applicationPath: "/Applications/One.app",
@@ -135,30 +135,65 @@ enum ToubarReplaceSmokeTest {
                 displayName: "Three"
             ),
         ]
-        let fifoAfter = CustomWorkspaceAppList.inserting(
+        let fullAdd = CustomWorkspaceAppList.adding(
             CustomWorkspaceApp(
                 bundleIdentifier: "a.four",
                 applicationPath: "/Applications/Four.app",
                 displayName: "Four"
             ),
-            into: fifoSeed
+            to: pinSeed
         )
         expect(
-            fifoAfter.map(\.bundleIdentifier) == ["a.two", "a.three", "a.four"],
-            "custom app insert must FIFO-evict the oldest entry",
+            fullAdd == nil,
+            "custom app add must refuse when already at maxCount",
             failures: &failures
         )
-        let fifoDedupe = CustomWorkspaceAppList.inserting(
+        let replaceMid = CustomWorkspaceAppList.replacing(
+            at: 1,
+            with: CustomWorkspaceApp(
+                bundleIdentifier: "a.four",
+                applicationPath: "/Applications/Four.app",
+                displayName: "Four"
+            ),
+            in: pinSeed
+        )
+        expect(
+            replaceMid?.map(\.bundleIdentifier) == ["a.one", "a.four", "a.three"],
+            "custom app replace must update the chosen slot only",
+            failures: &failures
+        )
+        let refreshExisting = CustomWorkspaceAppList.adding(
             CustomWorkspaceApp(
                 bundleIdentifier: "a.two",
                 applicationPath: "/Applications/Two.app",
                 displayName: "Two"
             ),
-            into: fifoSeed
+            to: pinSeed
         )
         expect(
-            fifoDedupe.map(\.bundleIdentifier) == ["a.one", "a.three", "a.two"],
-            "re-adding an existing custom app must move it to newest",
+            refreshExisting?.map(\.bundleIdentifier)
+                == ["a.one", "a.two", "a.three"],
+            "re-adding an existing custom app must refresh in place",
+            failures: &failures
+        )
+        let removed = CustomWorkspaceAppList.removing(at: 0, from: pinSeed)
+        expect(
+            removed?.map(\.bundleIdentifier) == ["a.two", "a.three"],
+            "custom app remove must drop the chosen slot",
+            failures: &failures
+        )
+        let appendWhenRoom = CustomWorkspaceAppList.adding(
+            CustomWorkspaceApp(
+                bundleIdentifier: "a.four",
+                applicationPath: "/Applications/Four.app",
+                displayName: "Four"
+            ),
+            to: Array(pinSeed.prefix(2))
+        )
+        expect(
+            appendWhenRoom?.map(\.bundleIdentifier)
+                == ["a.one", "a.two", "a.four"],
+            "custom app add must append when under capacity",
             failures: &failures
         )
         expect(
@@ -465,7 +500,7 @@ enum ToubarReplaceSmokeTest {
             WorkspaceTouchBarLayout.agentSlotCount(agentCount: 4) == 4
                 && WorkspaceTouchBarLayout.customSlotCount(appCount: 2) == 3
                 && WorkspaceTouchBarLayout.customSlotCount(appCount: 0) == 1,
-            "slot counts: agents by count; custom apps+add or empty label",
+            "slot counts: agents by count; custom apps+settings or empty label",
             failures: &failures
         )
         let agentsInner = WorkspaceTouchBarLayout.zoneContentRect(

@@ -67,7 +67,7 @@ TOUBAR_VERSION=1.2.3 Packaging/build-app.sh
   - **Cursor**
   - **Claude Code**（在设置中选择终端，如 Otty 或 Terminal）
   - **Grok Build**
-- **自定义 App**：最多固定 3 个常用 `.app`；空位显示「自定义app」；满员后再添加会按先进先出挤掉最旧的一个。点图标仅打开该应用。
+- **自定义 App**：最多固定 3 个常用 `.app`。空态点「自定义app」、有应用时点右侧齿轮，均打开**设置**进行新增 / 替换 / 移除；点图标仅打开该应用（不再静默 FIFO 挤掉）。
 
 启动 Agent 成功后，默认约半秒自动返回镜像模式（可在设置中关闭）。
 
@@ -75,7 +75,7 @@ TOUBAR_VERSION=1.2.3 Packaging/build-app.sh
 
 菜单栏图标可打开：
 
-- **设置…**：展示位置、镜像宽高、帧率、切换按钮位置、Claude Code 所用终端、启动 Agent 后是否自动返回等
+- **设置…**：展示位置、镜像宽高、帧率、切换按钮位置、Claude Code 所用终端、启动 Agent 后是否自动返回、Workspace 自定义 App 管理等
 - **帮助…**：使用说明与镜像异常时的恢复建议
 - **退出 ToubarReplace**
 

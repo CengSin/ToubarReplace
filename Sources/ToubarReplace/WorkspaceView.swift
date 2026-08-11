@@ -299,9 +299,9 @@ final class WorkspaceBarView: NSView {
             agentIconRow.onAgentActivated = onAgentActivated
         }
     }
-    var onAddCustomApp: (() -> Void)? {
+    var onOpenSettings: (() -> Void)? {
         didSet {
-            customAppsView.onAddCustomApp = onAddCustomApp
+            customAppsView.onOpenSettings = onOpenSettings
         }
     }
     var onOpenCustomApp: ((CustomWorkspaceApp) -> Void)? {
@@ -331,8 +331,8 @@ final class WorkspaceBarView: NSView {
         }
         addSubview(agentIconRow)
 
-        customAppsView.onAddCustomApp = { [weak self] in
-            self?.onAddCustomApp?()
+        customAppsView.onOpenSettings = { [weak self] in
+            self?.onOpenSettings?()
         }
         customAppsView.onOpenCustomApp = { [weak self] app in
             self?.onOpenCustomApp?(app)

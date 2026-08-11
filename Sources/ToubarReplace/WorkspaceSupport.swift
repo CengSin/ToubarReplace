@@ -113,7 +113,8 @@ enum WorkspacePreferences {
 
     private static let customAppsKey = "ToubarReplace.workspace.customApps"
 
-    /// Ordered oldest → newest. At most ``CustomWorkspaceAppList.maxCount``.
+    /// Pinned favorites in slot order (index 0…maxCount-1). Cap via
+    /// ``CustomWorkspaceAppList.normalized``.
     static var customApps: [CustomWorkspaceApp] {
         get {
             guard
@@ -171,25 +172,63 @@ struct CustomWorkspaceApp: Codable, Equatable {
 enum CustomWorkspaceAppList {
     static let maxCount = 3
 
-    /// Oldest first; drops from the front when over capacity (FIFO).
+    /// Dedupe (last wins) and keep at most ``maxCount`` in list order.
+    /// Does not silently evict by FIFO when adding — callers use ``adding`` /
+    /// ``replacing`` for explicit pin management.
     static func normalized(_ apps: [CustomWorkspaceApp]) -> [CustomWorkspaceApp] {
         var result: [CustomWorkspaceApp] = []
         for app in apps {
             result.removeAll { Self.isSameApp($0, app) }
             result.append(app)
-            while result.count > maxCount {
-                result.removeFirst()
-            }
+        }
+        if result.count > maxCount {
+            result = Array(result.prefix(maxCount))
         }
         return result
     }
 
-    /// Insert or move `app` to newest; evict oldest when over ``maxCount``.
-    static func inserting(
+    /// Append when under capacity. If already pinned, refreshes that slot.
+    /// Returns `nil` when full and `app` is not already in the list.
+    static func adding(
         _ app: CustomWorkspaceApp,
-        into apps: [CustomWorkspaceApp]
-    ) -> [CustomWorkspaceApp] {
-        normalized(apps + [app])
+        to apps: [CustomWorkspaceApp]
+    ) -> [CustomWorkspaceApp]? {
+        var result = normalized(apps)
+        if let existingIndex = result.firstIndex(where: { isSameApp($0, app) }) {
+            result[existingIndex] = app
+            return result
+        }
+        guard result.count < maxCount else { return nil }
+        result.append(app)
+        return result
+    }
+
+    /// Replace the pin at `index`. Other slots that match the same app are
+    /// removed. Returns `nil` if `index` is out of range.
+    static func replacing(
+        at index: Int,
+        with app: CustomWorkspaceApp,
+        in apps: [CustomWorkspaceApp]
+    ) -> [CustomWorkspaceApp]? {
+        var result = normalized(apps)
+        guard result.indices.contains(index) else { return nil }
+        result[index] = app
+        var kept: [CustomWorkspaceApp] = []
+        for (i, item) in result.enumerated() {
+            if i != index, isSameApp(item, app) { continue }
+            kept.append(item)
+        }
+        return normalized(kept)
+    }
+
+    static func removing(
+        at index: Int,
+        from apps: [CustomWorkspaceApp]
+    ) -> [CustomWorkspaceApp]? {
+        var result = normalized(apps)
+        guard result.indices.contains(index) else { return nil }
+        result.remove(at: index)
+        return result
     }
 
     static func isSameApp(_ lhs: CustomWorkspaceApp, _ rhs: CustomWorkspaceApp)

@@ -201,7 +201,7 @@ enum WorkspaceTouchBarLayout {
         max(agentCount, 1)
     }
 
-    /// Slot count for custom zone: empty label, or apps + add button.
+    /// Slot count for custom zone: empty label, or apps + settings button.
     static func customSlotCount(appCount: Int) -> Int {
         let count = max(0, min(appCount, CustomWorkspaceAppList.maxCount))
         return count == 0 ? 1 : count + 1
@@ -775,16 +775,17 @@ final class WorkspaceTouchBarContentView: NSView {
     }
 }
 
-/// Custom-apps zone: empty "自定义app" button, or icons + add — equal slots.
+/// Custom-apps zone: empty "自定义app" or icons + settings — equal slots.
 @MainActor
 final class WorkspaceCustomAppsView: NSView {
     private let emptyButton = WorkspaceChromeButton()
-    private let addButton = WorkspaceChromeButton()
+    private let settingsButton = WorkspaceChromeButton()
     private var iconButtons: [WorkspaceChromeButton] = []
     private var apps: [CustomWorkspaceApp] = []
     private var slotViews: [NSView] = []
 
-    var onAddCustomApp: (() -> Void)?
+    /// Opens app settings to manage pinned custom apps (add / replace / remove).
+    var onOpenSettings: (() -> Void)?
     var onOpenCustomApp: ((CustomWorkspaceApp) -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -793,28 +794,28 @@ final class WorkspaceCustomAppsView: NSView {
 
         emptyButton.configureTitleChrome(
             title: "自定义app",
-            toolTip: "添加常用应用（最多 3 个，超出按先进先出替换）"
+            toolTip: "打开设置，管理常用应用（最多 3 个）"
         )
         emptyButton.target = self
-        emptyButton.action = #selector(addCustomApp)
+        emptyButton.action = #selector(openSettings)
         addSubview(emptyButton)
 
-        addButton.configureTitleChrome(
+        settingsButton.configureTitleChrome(
             title: "",
-            toolTip: "添加常用应用（最多 3 个，超出按先进先出替换）"
+            toolTip: "打开设置，管理常用应用（最多 3 个）"
         )
-        addButton.image = NSImage(
-            systemSymbolName: "plus",
-            accessibilityDescription: "添加自定义 App"
+        settingsButton.image = NSImage(
+            systemSymbolName: "gearshape",
+            accessibilityDescription: "设置自定义 App"
         )?.withSymbolConfiguration(
             NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
         )
-        addButton.imagePosition = .imageOnly
-        addButton.imageScaling = .scaleProportionallyDown
-        addButton.contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
-        addButton.target = self
-        addButton.action = #selector(addCustomApp)
-        addSubview(addButton)
+        settingsButton.imagePosition = .imageOnly
+        settingsButton.imageScaling = .scaleProportionallyDown
+        settingsButton.contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
+        settingsButton.target = self
+        settingsButton.action = #selector(openSettings)
+        addSubview(settingsButton)
 
         display(apps: WorkspacePreferences.customApps)
     }
@@ -833,11 +834,11 @@ final class WorkspaceCustomAppsView: NSView {
 
         if self.apps.isEmpty {
             emptyButton.isHidden = false
-            addButton.isHidden = true
+            settingsButton.isHidden = true
             slotViews = [emptyButton]
         } else {
             emptyButton.isHidden = true
-            addButton.isHidden = false
+            settingsButton.isHidden = false
             var views: [NSView] = []
             for (index, app) in self.apps.enumerated() {
                 let button = makeAppButton(app: app, index: index)
@@ -845,7 +846,7 @@ final class WorkspaceCustomAppsView: NSView {
                 iconButtons.append(button)
                 views.append(button)
             }
-            views.append(addButton)
+            views.append(settingsButton)
             slotViews = views
         }
         needsLayout = true
@@ -889,8 +890,8 @@ final class WorkspaceCustomAppsView: NSView {
         return button
     }
 
-    @objc private func addCustomApp() {
-        onAddCustomApp?()
+    @objc private func openSettings() {
+        onOpenSettings?()
     }
 
     @objc private func openCustomApp(_ sender: NSButton) {
@@ -1135,7 +1136,7 @@ final class WorkspaceTouchBarController: NSObject, NSTouchBarDelegate {
 
     var onResolvePath: (() -> Void)?
     var onAgentActivated: ((AvailableAgent) -> Void)?
-    var onAddCustomApp: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
     var onOpenCustomApp: ((CustomWorkspaceApp) -> Void)?
     var onPresentationInterrupted: (() -> Void)?
     var onToggleWorkspace: (() -> Void)?
@@ -1165,8 +1166,8 @@ final class WorkspaceTouchBarController: NSObject, NSTouchBarDelegate {
             self.onAgentActivated?(agent)
         }
 
-        customAppsView.onAddCustomApp = { [weak self] in
-            self?.onAddCustomApp?()
+        customAppsView.onOpenSettings = { [weak self] in
+            self?.onOpenSettings?()
         }
         customAppsView.onOpenCustomApp = { [weak self] app in
             self?.onOpenCustomApp?(app)

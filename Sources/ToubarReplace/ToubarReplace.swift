@@ -17,8 +17,8 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
         controller.onRequestWorkspaceDirectory = { [weak self] completion in
             self?.chooseWorkspaceDirectory(completion: completion)
         }
-        controller.onRequestCustomApplication = { [weak self] completion in
-            self?.chooseCustomApplication(completion: completion)
+        controller.onOpenSettings = { [weak self] in
+            self?.showSettings()
         }
         windowController = controller
         installStatusItem()
@@ -145,6 +145,12 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                         framesPerSecond
                     )
                 },
+                onPickApplication: { [weak self] completion in
+                    self?.chooseCustomApplication(completion: completion)
+                },
+                onCustomAppsChanged: { [weak self] in
+                    self?.windowController?.reloadCustomAppsFromPreferences()
+                },
                 onWindowClosed: { [weak self] in
                     NSApp.setActivationPolicy(.accessory)
                     self?.windowController?.ensurePhysicalSwitcherPresented()
@@ -155,6 +161,9 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                 self?.settingsWindowController?.updateCustomTopLeft(topLeft)
             }
         }
+        // Refresh pin list if settings was already open (e.g. preferences
+        // changed externally); always re-show the window.
+        settingsWindowController?.reloadCustomAppsRows()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindowController?.window?.makeKeyAndOrderFront(nil)
@@ -237,8 +246,8 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
     ) {
         let panel = NSOpenPanel()
         panel.title = "选择常用应用"
-        panel.prompt = "添加"
-        panel.message = "最多 3 个；再添加时会按先进先出替换最早的应用"
+        panel.prompt = "选择"
+        panel.message = "固定到 Workspace 自定义区（最多 3 个，在设置中管理）"
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
@@ -249,6 +258,19 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
             fileURLWithPath: "/Applications",
             isDirectory: true
         )
+
+        // Prefer sheet on settings when visible so activation policy stays
+        // consistent with the settings window.
+        if let settingsWindow = settingsWindowController?.window,
+            settingsWindow.isVisible
+        {
+            panel.beginSheetModal(for: settingsWindow) { response in
+                Task { @MainActor in
+                    completion(response == .OK ? panel.url : nil)
+                }
+            }
+            return
+        }
 
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)

@@ -148,6 +148,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
     private let heightField: NSTextField
     private let framesPerSecondField: NSTextField
     private let workspaceAutoCollapseCheckbox: NSButton
+    private let customAppsStack: NSStackView
     private let onPositionChanged: (TouchBarDisplayPosition) -> Void
     private let onCustomTopLeftChanged: (CGPoint) -> Void
     private let onWorkspaceFloatingSwitcherChanged: (Bool) -> Void
@@ -156,6 +157,8 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
     private let onTerminalAdapterChanged: (TerminalAdapterID) -> Void
     private let onPixelSizeChanged: (CGSize) -> Void
     private let onFramesPerSecondChanged: (Int) -> Void
+    private let onPickApplication: (@escaping (URL?) -> Void) -> Void
+    private let onCustomAppsChanged: () -> Void
     private let onWindowClosed: () -> Void
 
     init(
@@ -174,6 +177,8 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         onTerminalAdapterChanged: @escaping (TerminalAdapterID) -> Void,
         onPixelSizeChanged: @escaping (CGSize) -> Void,
         onFramesPerSecondChanged: @escaping (Int) -> Void,
+        onPickApplication: @escaping (@escaping (URL?) -> Void) -> Void,
+        onCustomAppsChanged: @escaping () -> Void,
         onWindowClosed: @escaping () -> Void
     ) {
         self.positionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -189,6 +194,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             target: nil,
             action: nil
         )
+        self.customAppsStack = NSStackView()
         self.onPositionChanged = onPositionChanged
         self.onCustomTopLeftChanged = onCustomTopLeftChanged
         self.onWorkspaceFloatingSwitcherChanged = onWorkspaceFloatingSwitcherChanged
@@ -197,9 +203,11 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         self.onTerminalAdapterChanged = onTerminalAdapterChanged
         self.onPixelSizeChanged = onPixelSizeChanged
         self.onFramesPerSecondChanged = onFramesPerSecondChanged
+        self.onPickApplication = onPickApplication
+        self.onCustomAppsChanged = onCustomAppsChanged
         self.onWindowClosed = onWindowClosed
 
-        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 500))
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 640))
         let titleLabel = NSTextField(labelWithString: "Touch Bar 镜像设置")
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
 
@@ -273,6 +281,23 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         framesPerSecondField.alignment = .right
         framesPerSecondField.integerValue = currentFramesPerSecond
 
+        let customAppsSectionLabel = NSTextField(labelWithString: "自定义 App")
+        customAppsSectionLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        let customAppsHint = NSTextField(
+            labelWithString: """
+            Workspace 右侧最多 3 个常用应用；点图标打开，点齿轮打开本设置。\
+            在此新增、替换或移除（不会自动挤掉已固定的应用）。
+            """
+        )
+        customAppsHint.textColor = .secondaryLabelColor
+        customAppsHint.maximumNumberOfLines = 3
+        customAppsHint.lineBreakMode = .byWordWrapping
+
+        customAppsStack.orientation = .vertical
+        customAppsStack.alignment = .leading
+        customAppsStack.spacing = 8
+        customAppsStack.translatesAutoresizingMaskIntoConstraints = false
+
         let hintLabel = NSTextField(
             labelWithString: """
             展示位置：固定锚点、上次关闭位置，或自定义窗口左上角（AppKit 坐标，Y 向上）。\
@@ -345,6 +370,9 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
                 terminalAdapterRow,
                 sizeRow,
                 framesPerSecondRow,
+                customAppsSectionLabel,
+                customAppsHint,
+                customAppsStack,
                 hintLabel,
             ]
         )
@@ -376,6 +404,8 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             widthField.widthAnchor.constraint(equalToConstant: 90),
             heightField.widthAnchor.constraint(equalToConstant: 70),
             framesPerSecondField.widthAnchor.constraint(equalToConstant: 90),
+            customAppsHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            customAppsStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
             hintLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
 
@@ -411,6 +441,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         framesPerSecondField.target = self
         framesPerSecondField.action = #selector(framesPerSecondChanged(_:))
         updateCustomOriginFieldsEnabled(for: currentPosition)
+        rebuildCustomAppsRows()
     }
 
     @available(*, unavailable)
@@ -420,6 +451,10 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
 
     func windowWillClose(_ notification: Notification) {
         onWindowClosed()
+    }
+
+    func reloadCustomAppsRows() {
+        rebuildCustomAppsRows()
     }
 
     func updateCustomTopLeft(_ topLeft: CGPoint) {
@@ -501,5 +536,174 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         originYField.isEnabled = enabled
         originXField.alphaValue = enabled ? 1 : 0.5
         originYField.alphaValue = enabled ? 1 : 0.5
+    }
+
+    private func rebuildCustomAppsRows() {
+        for view in customAppsStack.arrangedSubviews {
+            customAppsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let apps = WorkspacePreferences.customApps
+        for (index, app) in apps.enumerated() {
+            customAppsStack.addArrangedSubview(
+                makeCustomAppRow(app: app, index: index)
+            )
+        }
+
+        if apps.count < CustomWorkspaceAppList.maxCount {
+            let addButton = NSButton(
+                title: "添加应用…",
+                target: self,
+                action: #selector(addCustomApp)
+            )
+            addButton.bezelStyle = .rounded
+            customAppsStack.addArrangedSubview(addButton)
+        } else {
+            let fullHint = NSTextField(
+                labelWithString:
+                    "已满 \(CustomWorkspaceAppList.maxCount) 个，可替换或移除后再添加。"
+            )
+            fullHint.textColor = .secondaryLabelColor
+            fullHint.font = .systemFont(ofSize: 11)
+            customAppsStack.addArrangedSubview(fullHint)
+        }
+
+        if apps.isEmpty {
+            let emptyHint = NSTextField(labelWithString: "尚未固定应用")
+            emptyHint.textColor = .secondaryLabelColor
+            emptyHint.font = .systemFont(ofSize: 12)
+            customAppsStack.insertArrangedSubview(emptyHint, at: 0)
+        }
+    }
+
+    private func makeCustomAppRow(app: CustomWorkspaceApp, index: Int) -> NSView {
+        let iconView = NSImageView()
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.image = WorkspaceTouchBarStyle.customAppIcon(for: app)
+            ?? NSImage(
+                systemSymbolName: "app.fill",
+                accessibilityDescription: nil
+            )
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+
+        let nameLabel = NSTextField(labelWithString: app.displayName)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
+        )
+
+        let replaceButton = NSButton(
+            title: "替换…",
+            target: self,
+            action: #selector(replaceCustomApp(_:))
+        )
+        replaceButton.bezelStyle = .rounded
+        replaceButton.tag = index
+
+        let removeButton = NSButton(
+            title: "移除",
+            target: self,
+            action: #selector(removeCustomApp(_:))
+        )
+        removeButton.bezelStyle = .rounded
+        removeButton.tag = index
+
+        let row = NSStackView(views: [
+            iconView,
+            nameLabel,
+            replaceButton,
+            removeButton,
+        ])
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 20),
+            iconView.heightAnchor.constraint(equalToConstant: 20),
+            nameLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+        ])
+        return row
+    }
+
+    @objc
+    private func addCustomApp() {
+        onPickApplication { [weak self] url in
+            guard let self else { return }
+            guard
+                let url,
+                let app = CustomWorkspaceApp.make(fromApplicationURL: url)
+            else {
+                return
+            }
+            guard
+                let updated = CustomWorkspaceAppList.adding(
+                    app,
+                    to: WorkspacePreferences.customApps
+                )
+            else {
+                self.presentCustomAppsFullAlert()
+                return
+            }
+            WorkspacePreferences.customApps = updated
+            self.rebuildCustomAppsRows()
+            self.onCustomAppsChanged()
+        }
+    }
+
+    @objc
+    private func replaceCustomApp(_ sender: NSButton) {
+        let index = sender.tag
+        onPickApplication { [weak self] url in
+            guard let self else { return }
+            guard
+                let url,
+                let app = CustomWorkspaceApp.make(fromApplicationURL: url)
+            else {
+                return
+            }
+            guard
+                let updated = CustomWorkspaceAppList.replacing(
+                    at: index,
+                    with: app,
+                    in: WorkspacePreferences.customApps
+                )
+            else {
+                return
+            }
+            WorkspacePreferences.customApps = updated
+            self.rebuildCustomAppsRows()
+            self.onCustomAppsChanged()
+        }
+    }
+
+    @objc
+    private func removeCustomApp(_ sender: NSButton) {
+        let index = sender.tag
+        guard
+            let updated = CustomWorkspaceAppList.removing(
+                at: index,
+                from: WorkspacePreferences.customApps
+            )
+        else {
+            return
+        }
+        WorkspacePreferences.customApps = updated
+        rebuildCustomAppsRows()
+        onCustomAppsChanged()
+    }
+
+    private func presentCustomAppsFullAlert() {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "自定义 App 已满"
+        alert.informativeText =
+            "最多固定 \(CustomWorkspaceAppList.maxCount) 个。请先移除或替换其中一个。"
+        alert.addButton(withTitle: "好")
+        alert.beginSheetModal(for: window, completionHandler: nil)
     }
 }

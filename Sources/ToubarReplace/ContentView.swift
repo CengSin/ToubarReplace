@@ -187,9 +187,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     var onRequestWorkspaceDirectory: (
         (@escaping (URL?) -> Void) -> Void
     )?
-    var onRequestCustomApplication: (
-        (@escaping (URL?) -> Void) -> Void
-    )?
+    /// Opens the settings window (custom apps are managed there).
+    var onOpenSettings: (() -> Void)?
 
     init() {
         let scale = NSScreen.main?.backingScaleFactor ?? 2
@@ -547,8 +546,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         rootView.workspaceView.onAgentActivated = { [weak self] agent in
             self?.launch(agent)
         }
-        rootView.workspaceView.onAddCustomApp = { [weak self] in
-            self?.addCustomWorkspaceApp()
+        rootView.workspaceView.onOpenSettings = { [weak self] in
+            self?.onOpenSettings?()
         }
         rootView.workspaceView.onOpenCustomApp = { [weak self] app in
             self?.openCustomWorkspaceApp(app)
@@ -559,8 +558,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         workspaceTouchBarController.onAgentActivated = { [weak self] agent in
             self?.launch(agent)
         }
-        workspaceTouchBarController.onAddCustomApp = { [weak self] in
-            self?.addCustomWorkspaceApp()
+        workspaceTouchBarController.onOpenSettings = { [weak self] in
+            self?.onOpenSettings?()
         }
         workspaceTouchBarController.onOpenCustomApp = { [weak self] app in
             self?.openCustomWorkspaceApp(app)
@@ -746,24 +745,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         requestWorkspaceDirectory(frontmostContext: frontmostContext)
     }
 
-    private func addCustomWorkspaceApp() {
-        guard let onRequestCustomApplication else { return }
-        onRequestCustomApplication { [weak self] applicationURL in
-            guard let self else { return }
-            guard
-                let applicationURL,
-                let app = CustomWorkspaceApp.make(fromApplicationURL: applicationURL)
-            else {
-                return
-            }
-            let updated = CustomWorkspaceAppList.inserting(
-                app,
-                into: WorkspacePreferences.customApps
-            )
-            WorkspacePreferences.customApps = updated
-            self.rootView.workspaceView.reloadCustomAppsFromPreferences()
-            self.workspaceTouchBarController.reloadCustomAppsFromPreferences()
-        }
+    func reloadCustomAppsFromPreferences() {
+        rootView.workspaceView.reloadCustomAppsFromPreferences()
+        workspaceTouchBarController.reloadCustomAppsFromPreferences()
     }
 
     private func openCustomWorkspaceApp(_ app: CustomWorkspaceApp) {

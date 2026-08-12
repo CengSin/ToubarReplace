@@ -19,6 +19,13 @@ CGDisplayStreamRef _Nullable TBRCreateTouchBarDisplayStream(
     CGDisplayStreamFrameAvailableHandler _Nonnull handler
 );
 
+/// True when SkyLight exports `SLSDFRDisplayStreamCreate` (no stream is started).
+bool TBRCanCreateTouchBarDisplayStream(void);
+
+/// True when a Touch Bar display stream object can be created (released immediately).
+/// Use this in addition to symbol presence: some OS builds export the symbol without hardware.
+bool TBRCanInstantiateTouchBarDisplayStream(void);
+
 CGError TBRStartDisplayStream(CGDisplayStreamRef _Nonnull stream);
 CGError TBRStopDisplayStream(CGDisplayStreamRef _Nonnull stream);
 int32_t TBRGetTouchBarStatus(void);

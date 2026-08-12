@@ -535,7 +535,7 @@ final class TouchBarRootView: NSView {
     private let transitionCoverView = NSView(frame: .zero)
     private var transitionCoverTask: Task<Void, Never>?
     private(set) var scene: BarScene = .mirror
-    private var showsWorkspaceFallback = false
+    private(set) var showsWorkspaceFallback = false
 
     override init(frame frameRect: NSRect) {
         surfaceView = TouchBarSurfaceView(frame: .zero)

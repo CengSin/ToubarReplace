@@ -25,10 +25,7 @@ static void *TBRLoadFramework(const char *path) {
     return dlopen(path, RTLD_LAZY | RTLD_LOCAL);
 }
 
-CGDisplayStreamRef _Nullable TBRCreateTouchBarDisplayStream(
-    dispatch_queue_t queue,
-    CGDisplayStreamFrameAvailableHandler handler
-) {
+static TBRCreateStreamFunction TBRResolveCreateTouchBarDisplayStream(void) {
     static TBRCreateStreamFunction createStream;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -42,7 +39,52 @@ CGDisplayStreamRef _Nullable TBRCreateTouchBarDisplayStream(
             );
         }
     });
+    return createStream;
+}
 
+bool TBRCanCreateTouchBarDisplayStream(void) {
+    return TBRResolveCreateTouchBarDisplayStream() != NULL;
+}
+
+bool TBRCanInstantiateTouchBarDisplayStream(void) {
+    static bool canInstantiate;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        if (!TBRCanCreateTouchBarDisplayStream()) {
+            canInstantiate = false;
+            return;
+        }
+        dispatch_queue_t queue = dispatch_queue_create(
+            "com.toubarreplace.dfr-probe",
+            DISPATCH_QUEUE_SERIAL
+        );
+        CGDisplayStreamRef stream = TBRCreateTouchBarDisplayStream(
+            queue,
+            ^(CGDisplayStreamFrameStatus status,
+              uint64_t displayTime,
+              IOSurfaceRef _Nullable frameSurface,
+              CGDisplayStreamUpdateRef _Nullable updateRef) {
+                (void)status;
+                (void)displayTime;
+                (void)frameSurface;
+                (void)updateRef;
+            }
+        );
+        if (stream == NULL) {
+            canInstantiate = false;
+            return;
+        }
+        CFRelease(stream);
+        canInstantiate = true;
+    });
+    return canInstantiate;
+}
+
+CGDisplayStreamRef _Nullable TBRCreateTouchBarDisplayStream(
+    dispatch_queue_t queue,
+    CGDisplayStreamFrameAvailableHandler handler
+) {
+    TBRCreateStreamFunction createStream = TBRResolveCreateTouchBarDisplayStream();
     return createStream == NULL ? NULL : createStream(0, queue, handler);
 }
 

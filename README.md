@@ -6,7 +6,8 @@
 
 在桌面上镜像真实硬件 Touch Bar，并可选在物理 Touch Bar 上打开 Workspace，用触控直接选择项目路径、启动 Agent、打开常用 App。
 
-> 需要一台**带 Touch Bar** 的 Intel Mac（macOS 14 及以上）。
+> **完整镜像（物理 Touch Bar）**：带 Touch Bar 的 Intel Mac（macOS 14 及以上）。  
+> **Apple Silicon / 无物理 Touch Bar**：可原生运行（universal 包）；启动后默认进入 **软件 Workspace**（路径 / Agent / 自定义 App 在桌面条上操作），无系统 Control Strip 真镜像。
 
 ---
 
@@ -35,13 +36,13 @@ swift build
 ./.build/debug/ToubarReplace
 ```
 
-打包为 `.app` / DMG / PKG：
+打包为 `.app` / DMG / PKG（尽量打 **arm64 + x86_64** universal；单侧交叉编译失败时回退本机架构）：
 
 ```sh
 TOUBAR_VERSION=1.2.3 Packaging/build-app.sh
 ```
 
-产物在 `dist/` 目录。
+产物在 `dist/` 目录。可用 `lipo -info dist/ToubarReplace.app/Contents/MacOS/ToubarReplace` 查看架构切片。
 
 ---
 
@@ -58,7 +59,7 @@ TOUBAR_VERSION=1.2.3 Packaging/build-app.sh
 
 ### Workspace（工作区）
 
-通过切换按钮在物理 Touch Bar 上打开 Workspace，再次点击可返回系统 / 镜像模式：
+通过切换按钮打开 Workspace，再次点击可返回系统 / 镜像模式（有物理栏时呈现在 Touch Bar 上；无物理栏时呈现在桌面镜像窗内并可直接点击）：
 
 - **切换方式**：默认使用可拖动的独立浮窗（短按切换，长按或拖动只改位置）；也可在设置中改为附着在镜像左侧或右侧。物理 Workspace 最左侧也有返回控件。
 - **路径区**：Finder 在前台时优先显示当前 Finder 窗口目录；也可点路径区自行选择文件夹。

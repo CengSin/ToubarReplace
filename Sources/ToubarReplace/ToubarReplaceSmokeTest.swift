@@ -873,6 +873,114 @@ enum ToubarReplaceSmokeTest {
             failures: &failures
         )
 
+        // Apple Silicon / no-Touch-Bar software Workspace policies.
+        expect(
+            !TouchBarHardwareCapability.softwareWorkspaceMode(
+                canPresentSystemModal: true,
+                canCreateDisplayStream: true,
+                canInstantiateDisplayStream: true
+            ),
+            "usable physical Touch Bar stack must not enter software Workspace mode",
+            failures: &failures
+        )
+        expect(
+            TouchBarHardwareCapability.softwareWorkspaceMode(
+                canPresentSystemModal: false,
+                canCreateDisplayStream: true,
+                canInstantiateDisplayStream: true
+            ),
+            "missing system-modal present must enter software Workspace mode",
+            failures: &failures
+        )
+        expect(
+            TouchBarHardwareCapability.softwareWorkspaceMode(
+                canPresentSystemModal: true,
+                canCreateDisplayStream: false,
+                canInstantiateDisplayStream: false
+            ),
+            "missing display-stream symbol must enter software Workspace mode",
+            failures: &failures
+        )
+        expect(
+            TouchBarHardwareCapability.softwareWorkspaceMode(
+                canPresentSystemModal: true,
+                canCreateDisplayStream: true,
+                canInstantiateDisplayStream: false
+            ),
+            "stream symbol without instantiable stream must enter software Workspace mode",
+            failures: &failures
+        )
+        expect(
+            SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+                usesSoftwareWorkspace: true
+            )
+                && !SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+                    usesSoftwareWorkspace: false
+                ),
+            "software mode must default to Workspace at launch; hardware must not",
+            failures: &failures
+        )
+        expect(
+            SoftwareWorkspaceLaunchPolicy.effectiveSwitcherDisplayMode(
+                usesSoftwareWorkspace: true,
+                preferred: .touchBar
+            ) == .floating
+                && SoftwareWorkspaceLaunchPolicy.effectiveSwitcherDisplayMode(
+                    usesSoftwareWorkspace: false,
+                    preferred: .touchBar
+                ) == .touchBar,
+            "software mode forces floating switcher; hardware honors preference",
+            failures: &failures
+        )
+        expect(
+            MirrorClickThroughPolicy.ignoresMouseEvents(
+                usesSoftwareWorkspace: false,
+                scene: .mirror,
+                showsWorkspaceFallback: false
+            )
+                && MirrorClickThroughPolicy.ignoresMouseEvents(
+                    usesSoftwareWorkspace: false,
+                    scene: .workspace,
+                    showsWorkspaceFallback: false
+                ),
+            "hardware mirror and physical Workspace must stay click-through",
+            failures: &failures
+        )
+        expect(
+            !MirrorClickThroughPolicy.ignoresMouseEvents(
+                usesSoftwareWorkspace: true,
+                scene: .workspace,
+                showsWorkspaceFallback: true
+            )
+                && !MirrorClickThroughPolicy.ignoresMouseEvents(
+                    usesSoftwareWorkspace: false,
+                    scene: .workspace,
+                    showsWorkspaceFallback: true
+                ),
+            "desktop Workspace fallback must accept mouse events",
+            failures: &failures
+        )
+        expect(
+            MirrorClickThroughPolicy.ignoresMouseEvents(
+                usesSoftwareWorkspace: true,
+                scene: .mirror,
+                showsWorkspaceFallback: false
+            ),
+            "software idle/mirror surface must stay click-through",
+            failures: &failures
+        )
+        // Live probe: when this Mac has a usable stack, software mode must stay off
+        // (Intel Touch Bar regression guard). Soft machines correctly report true.
+        if TouchBarHardwareCapability.canPresentSystemModal
+            && TouchBarHardwareCapability.canInstantiateDisplayStream
+        {
+            expect(
+                !TouchBarHardwareCapability.usesSoftwareWorkspace,
+                "live hardware probe must keep software Workspace mode off",
+                failures: &failures
+            )
+        }
+
         return failures
     }
 

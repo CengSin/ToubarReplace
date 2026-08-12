@@ -240,10 +240,20 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             withTitles: WorkspaceSwitcherDisplayMode.allCases.map(\.title)
         )
         let currentMode: WorkspaceSwitcherDisplayMode =
-            currentWorkspaceSwitcherFloats ? .floating : .touchBar
+            TouchBarHardwareCapability.usesSoftwareWorkspace
+            ? .floating
+            : (currentWorkspaceSwitcherFloats ? .floating : .touchBar)
         switcherDisplayModePopup.selectItem(
             at: WorkspaceSwitcherDisplayMode.allCases.firstIndex(of: currentMode) ?? 0
         )
+        // No physical bar: only the floating switcher is available.
+        if TouchBarHardwareCapability.usesSoftwareWorkspace,
+            let touchBarItem = switcherDisplayModePopup.item(
+                at: WorkspaceSwitcherDisplayMode.allCases.firstIndex(of: .touchBar) ?? -1
+            )
+        {
+            touchBarItem.isEnabled = false
+        }
 
         workspaceAutoCollapseCheckbox.state = currentWorkspaceAutoCollapse ? .on : .off
 

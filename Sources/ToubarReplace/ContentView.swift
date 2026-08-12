@@ -462,6 +462,20 @@ final class TouchBarSurfaceView: NSView {
         statusLabel.isHidden = false
         addSubview(statusLabel, positioned: .above, relativeTo: imageView)
     }
+
+    /// Placeholder when there is no physical Touch Bar (software Workspace mode).
+    func displaySoftwareWorkspaceIdle() {
+        imageView.layer?.contents = nil
+        imageView.isHidden = true
+        statusLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        statusLabel.stringValue = """
+        当前 Mac 无物理 Touch Bar
+        点击切换按钮打开 Workspace，选择路径并启动 Agent
+        """
+        statusLabel.toolTip = statusLabel.stringValue
+        statusLabel.isHidden = false
+        addSubview(statusLabel, positioned: .above, relativeTo: imageView)
+    }
 }
 
 @MainActor
@@ -590,10 +604,20 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             positionWindow()
         }
         window?.orderFrontRegardless()
+        configureFloatingWorkspaceSwitcher()
         showFloatingWorkspaceSwitcherIfNeeded()
         idleOpacityController.start()
-        capture.start()
-        presentPhysicalSwitcherIfNeeded()
+
+        if SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+            usesSoftwareWorkspace: usesSoftwareWorkspace
+        ) {
+            // No physical bar: skip display stream + system modal; open Workspace.
+            enterSoftwareWorkspace(isLaunch: true)
+        } else {
+            capture.start()
+            presentPhysicalSwitcherIfNeeded()
+            updateMirrorClickThrough()
+        }
     }
 
     func stop() {
@@ -726,11 +750,20 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func setWorkspaceSwitcherDisplayMode(_ mode: WorkspaceSwitcherDisplayMode) {
-        guard mode != WorkspacePreferences.switcherDisplayMode else { return }
-        WorkspacePreferences.switcherDisplayMode = mode
+        // Software mode cannot host a physical switcher; force floating without
+        // fighting the user on every open — still allow storing .floating.
+        let modeToStore: WorkspaceSwitcherDisplayMode
+        if usesSoftwareWorkspace {
+            modeToStore = .floating
+        } else {
+            modeToStore = mode
+        }
+        if modeToStore != WorkspacePreferences.switcherDisplayMode {
+            WorkspacePreferences.switcherDisplayMode = modeToStore
+        }
         configureFloatingWorkspaceSwitcher()
         showFloatingWorkspaceSwitcherIfNeeded()
-        if mode == .floating {
+        if effectiveSwitcherDisplayMode == .floating {
             switcherTouchBarController.dismiss()
         } else {
             presentPhysicalSwitcherIfNeeded()
@@ -888,8 +921,27 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private var usesSoftwareWorkspace: Bool {
+        TouchBarHardwareCapability.usesSoftwareWorkspace
+    }
+
+    private var effectiveSwitcherDisplayMode: WorkspaceSwitcherDisplayMode {
+        SoftwareWorkspaceLaunchPolicy.effectiveSwitcherDisplayMode(
+            usesSoftwareWorkspace: usesSoftwareWorkspace,
+            preferred: WorkspacePreferences.switcherDisplayMode
+        )
+    }
+
+    private func updateMirrorClickThrough() {
+        window?.ignoresMouseEvents = MirrorClickThroughPolicy.ignoresMouseEvents(
+            usesSoftwareWorkspace: usesSoftwareWorkspace,
+            scene: rootView.scene,
+            showsWorkspaceFallback: rootView.showsWorkspaceFallback
+        )
+    }
+
     private func configureFloatingWorkspaceSwitcher() {
-        guard WorkspacePreferences.switcherDisplayMode == .floating else {
+        guard effectiveSwitcherDisplayMode == .floating else {
             workspaceSwitcherWindowController?.window?.orderOut(nil)
             workspaceSwitcherWindowController = nil
             return
@@ -914,7 +966,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private func showFloatingWorkspaceSwitcherIfNeeded() {
         guard
             isRunning,
-            WorkspacePreferences.switcherDisplayMode == .floating,
+            effectiveSwitcherDisplayMode == .floating,
             let controller = workspaceSwitcherWindowController,
             let mirrorWindow = window
         else {
@@ -928,16 +980,65 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
 
     private func presentPhysicalSwitcherIfNeeded() {
         guard isRunning, rootView.scene == .mirror else { return }
-        guard WorkspacePreferences.switcherDisplayMode == .touchBar else {
+        guard !usesSoftwareWorkspace else {
+            switcherTouchBarController.dismiss()
+            return
+        }
+        guard effectiveSwitcherDisplayMode == .touchBar else {
             switcherTouchBarController.dismiss()
             return
         }
         switcherTouchBarController.present()
     }
 
+    /// Software path: Workspace lives on the desktop mirror (clickable tray).
+    private func enterSoftwareWorkspace(isLaunch: Bool) {
+        if !isLaunch {
+            rootView.beginSceneTransitionCover()
+        }
+        if lastFrontmostContext == nil {
+            lastFrontmostContext = FrontmostAppContext.capture()
+        }
+        currentWorkspaceContext = nil
+        availableAgents = []
+        rootView.setScene(.workspace)
+        workspaceSwitcherWindowController?.switcherView.setScene(.workspace)
+        idleOpacityController.registerFrameActivity()
+        switcherTouchBarController.dismiss()
+        rootView.setWorkspaceFallbackVisible(true)
+        updateMirrorClickThrough()
+
+        let frontmostContext = lastFrontmostContext
+            ?? FrontmostAppContext.capture()
+        if frontmostContext.isFinder,
+            let finderContext = workspacePathResolver.resolveFrontmostPath(
+                from: frontmostContext
+            )
+        {
+            acceptWorkspaceContext(finderContext)
+        } else if let recentContext = workspacePathResolver.recentContext(
+            frontmostApplication: frontmostContext
+        ) {
+            acceptWorkspaceContext(recentContext)
+        } else {
+            rootView.workspaceView.showIdle(
+                lastPath: WorkspacePreferences.lastPath
+            )
+            resolveWorkspacePath(refreshFrontmostContext: false)
+        }
+        if !isLaunch {
+            rootView.scheduleSceneTransitionCoverFade()
+        }
+    }
+
     private func toggleWorkspace() {
         switch rootView.scene {
         case .mirror:
+            if usesSoftwareWorkspace {
+                enterSoftwareWorkspace(isLaunch: false)
+                return
+            }
+
             rootView.beginSceneTransitionCover()
             if lastFrontmostContext == nil {
                 lastFrontmostContext = FrontmostAppContext.capture()
@@ -954,6 +1055,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             do {
                 try workspaceTouchBarController.present()
                 rootView.setWorkspaceFallbackVisible(false)
+                updateMirrorClickThrough()
             } catch {
                 rootView.workspaceView.showFailure(
                     error.localizedDescription,
@@ -961,6 +1063,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     agents: []
                 )
                 rootView.setWorkspaceFallbackVisible(true)
+                updateMirrorClickThrough()
                 presentPhysicalSwitcherIfNeeded()
                 rootView.scheduleSceneTransitionCoverFade()
                 return
@@ -992,19 +1095,28 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         rootView.beginSceneTransitionCover()
         finderSyncTask?.cancel()
         finderSyncTask = nil
-        workspaceTouchBarController.dismiss()
+        if !usesSoftwareWorkspace {
+            workspaceTouchBarController.dismiss()
+        }
         rootView.setWorkspaceFallbackVisible(false)
         rootView.setScene(.mirror)
         workspaceSwitcherWindowController?.switcherView.setScene(.mirror)
         idleOpacityController.registerFrameActivity()
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
-        presentPhysicalSwitcherIfNeeded()
+        if usesSoftwareWorkspace {
+            rootView.surfaceView.displaySoftwareWorkspaceIdle()
+        } else {
+            presentPhysicalSwitcherIfNeeded()
+        }
+        updateMirrorClickThrough()
         rootView.scheduleSceneTransitionCoverFade()
     }
 
     private func handleWorkspacePresentationInterrupted() {
         guard rootView.scene == .workspace else { return }
+        // Software mode never presents a system modal; ignore hardware interrupts.
+        guard !usesSoftwareWorkspace else { return }
         rootView.beginSceneTransitionCover()
         finderSyncTask?.cancel()
         finderSyncTask = nil
@@ -1015,6 +1127,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         lastFrontmostContext = nil
         isAgentLaunchInProgress = false
         presentPhysicalSwitcherIfNeeded()
+        updateMirrorClickThrough()
         rootView.scheduleSceneTransitionCoverFade()
     }
 

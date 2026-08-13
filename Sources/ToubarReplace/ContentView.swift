@@ -246,6 +246,16 @@ enum MirrorSceneTransition {
     static let fadeDuration: TimeInterval = 0.12
 }
 
+enum WorkspaceAsyncSessionPolicy {
+    static func canUpdate(
+        capturedGeneration: UInt64,
+        currentGeneration: UInt64,
+        scene: BarScene
+    ) -> Bool {
+        capturedGeneration == currentGeneration && scene == .workspace
+    }
+}
+
 @MainActor
 final class TouchBarIdleOpacityController {
     private weak var window: NSWindow?
@@ -502,6 +512,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private var currentWorkspaceContext: WorkspaceContext?
     private var availableAgents: [AvailableAgent] = []
     private var isAgentLaunchInProgress = false
+    private var workspaceGeneration: UInt64 = 0
+    private var agentLaunchTask: Task<Void, Never>?
+    private var autoCollapseTask: Task<Void, Never>?
     private var lastLaunchSignature: (AgentID, String, Date)?
     private(set) var displayPosition = TouchBarPreferences.displayPosition
     var onPixelSizeChanged: ((CGSize) -> Void)?
@@ -624,6 +637,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         isRunning = false
         finderSyncTask?.cancel()
         finderSyncTask = nil
+        cancelWorkspaceAsyncWork(invalidateSession: true)
         workspaceTouchBarController.dismiss()
         switcherTouchBarController.dismiss()
         workspaceSwitcherWindowController?.window?.orderOut(nil)
@@ -993,6 +1007,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
 
     /// Software path: Workspace lives on the desktop mirror (clickable tray).
     private func enterSoftwareWorkspace(isLaunch: Bool) {
+        beginWorkspaceSession()
         if !isLaunch {
             rootView.beginSceneTransitionCover()
         }
@@ -1039,6 +1054,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 return
             }
 
+            beginWorkspaceSession()
             rootView.beginSceneTransitionCover()
             if lastFrontmostContext == nil {
                 lastFrontmostContext = FrontmostAppContext.capture()
@@ -1092,6 +1108,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func closeWorkspace() {
+        cancelWorkspaceAsyncWork(invalidateSession: true)
         rootView.beginSceneTransitionCover()
         finderSyncTask?.cancel()
         finderSyncTask = nil
@@ -1103,7 +1120,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         workspaceSwitcherWindowController?.switcherView.setScene(.mirror)
         idleOpacityController.registerFrameActivity()
         lastFrontmostContext = nil
-        isAgentLaunchInProgress = false
         if usesSoftwareWorkspace {
             rootView.surfaceView.displaySoftwareWorkspaceIdle()
         } else {
@@ -1117,6 +1133,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         guard rootView.scene == .workspace else { return }
         // Software mode never presents a system modal; ignore hardware interrupts.
         guard !usesSoftwareWorkspace else { return }
+        cancelWorkspaceAsyncWork(invalidateSession: true)
         rootView.beginSceneTransitionCover()
         finderSyncTask?.cancel()
         finderSyncTask = nil
@@ -1125,7 +1142,6 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         workspaceSwitcherWindowController?.switcherView.setScene(.mirror)
         idleOpacityController.registerFrameActivity()
         lastFrontmostContext = nil
-        isAgentLaunchInProgress = false
         presentPhysicalSwitcherIfNeeded()
         updateMirrorClickThrough()
         rootView.scheduleSceneTransitionCoverFade()
@@ -1172,20 +1188,25 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func openCustomWorkspaceApp(_ app: CustomWorkspaceApp) {
-        do {
-            try CustomWorkspaceAppLauncher.open(app)
-        } catch {
-            // Soft failure: path / agent messaging surfaces stay usable.
-            rootView.workspaceView.showFailure(
-                error.localizedDescription,
-                context: currentWorkspaceContext,
-                agents: availableAgents
-            )
-            workspaceTouchBarController.showFailure(
-                error.localizedDescription,
-                context: currentWorkspaceContext,
-                agents: availableAgents
-            )
+        let generation = workspaceGeneration
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await CustomWorkspaceAppLauncher.open(app)
+            } catch {
+                guard self.canUpdateWorkspace(from: generation) else { return }
+                // Soft failure: path / agent messaging surfaces stay usable.
+                self.rootView.workspaceView.showFailure(
+                    error.localizedDescription,
+                    context: self.currentWorkspaceContext,
+                    agents: self.availableAgents
+                )
+                self.workspaceTouchBarController.showFailure(
+                    error.localizedDescription,
+                    context: self.currentWorkspaceContext,
+                    agents: self.availableAgents
+                )
+            }
         }
     }
 
@@ -1244,6 +1265,32 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
+    @discardableResult
+    private func beginWorkspaceSession() -> UInt64 {
+        cancelWorkspaceAsyncWork(invalidateSession: false)
+        workspaceGeneration &+= 1
+        return workspaceGeneration
+    }
+
+    private func cancelWorkspaceAsyncWork(invalidateSession: Bool) {
+        agentLaunchTask?.cancel()
+        agentLaunchTask = nil
+        autoCollapseTask?.cancel()
+        autoCollapseTask = nil
+        isAgentLaunchInProgress = false
+        if invalidateSession {
+            workspaceGeneration &+= 1
+        }
+    }
+
+    private func canUpdateWorkspace(from generation: UInt64) -> Bool {
+        WorkspaceAsyncSessionPolicy.canUpdate(
+            capturedGeneration: generation,
+            currentGeneration: workspaceGeneration,
+            scene: rootView.scene
+        )
+    }
+
     private func launch(_ agent: AvailableAgent) {
         guard !isAgentLaunchInProgress else { return }
         guard let context = currentWorkspaceContext else {
@@ -1274,14 +1321,23 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             agent: agent,
             context: context
         )
-        Task { @MainActor [weak self] in
+        let generation = workspaceGeneration
+        agentLaunchTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.isAgentLaunchInProgress = false }
+            defer {
+                if self.canUpdateWorkspace(from: generation) {
+                    self.isAgentLaunchInProgress = false
+                    self.agentLaunchTask = nil
+                }
+            }
             do {
+                try Task.checkCancellation()
                 try await self.agentLauncher.launch(
                     agent,
                     at: context.directoryURL
                 )
+                try Task.checkCancellation()
+                guard self.canUpdateWorkspace(from: generation) else { return }
                 self.rootView.workspaceView.showReady(
                     context: context,
                     agents: self.availableAgents
@@ -1291,11 +1347,26 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     agents: self.availableAgents
                 )
                 guard WorkspacePreferences.autoCollapse else { return }
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .milliseconds(500))
-                    self?.closeWorkspace()
+                self.autoCollapseTask?.cancel()
+                self.autoCollapseTask = Task { @MainActor [weak self] in
+                    do {
+                        try await Task.sleep(for: .milliseconds(500))
+                    } catch {
+                        return
+                    }
+                    guard
+                        let self,
+                        self.canUpdateWorkspace(from: generation)
+                    else {
+                        return
+                    }
+                    self.autoCollapseTask = nil
+                    self.closeWorkspace()
                 }
+            } catch is CancellationError {
+                return
             } catch {
+                guard self.canUpdateWorkspace(from: generation) else { return }
                 self.rootView.workspaceView.showFailure(
                     error.localizedDescription,
                     context: context,
@@ -1350,9 +1421,18 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     queue: .main
                 ) { [weak self] _ in
                     Task { @MainActor [weak self] in
-                        guard self?.isRunning == true else { return }
-                        self?.capture.restart()
-                        self?.presentPhysicalSwitcherIfNeeded()
+                        guard let self, self.isRunning else { return }
+                        switch TouchBarResumePolicy.action(
+                            usesSoftwareWorkspace: self.usesSoftwareWorkspace
+                        ) {
+                        case .restoreSoftwareWorkspace:
+                            if self.rootView.scene != .workspace {
+                                self.enterSoftwareWorkspace(isLaunch: true)
+                            }
+                        case .restartHardwareCapture:
+                            self.capture.restart()
+                            self.presentPhysicalSwitcherIfNeeded()
+                        }
                     }
                 }
             )

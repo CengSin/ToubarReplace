@@ -251,34 +251,61 @@ enum CustomWorkspaceAppLauncher {
         _ app: CustomWorkspaceApp,
         workspace: NSWorkspace = .shared,
         fileManager: FileManager = .default
-    ) throws {
-        if fileManager.fileExists(atPath: app.applicationPath) {
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
-            workspace.openApplication(
-                at: app.applicationURL,
-                configuration: configuration
-            ) { _, error in
-                _ = error
+    ) async throws {
+        try await open(
+            app,
+            fileManager: fileManager,
+            resolveBundleIdentifier: { bundleIdentifier in
+                workspace.urlForApplication(
+                    withBundleIdentifier: bundleIdentifier
+                )
+            },
+            openApplication: { url in
+                try await openApplication(at: url, workspace: workspace)
             }
+        )
+    }
+
+    @MainActor
+    static func open(
+        _ app: CustomWorkspaceApp,
+        fileManager: FileManager,
+        resolveBundleIdentifier: (String) -> URL?,
+        openApplication: (URL) async throws -> Void
+    ) async throws {
+        if fileManager.fileExists(atPath: app.applicationPath) {
+            try await openApplication(app.applicationURL)
             return
         }
         if let bundleIdentifier = app.bundleIdentifier,
-            let url = workspace.urlForApplication(
-                withBundleIdentifier: bundleIdentifier
-            )
+            let url = resolveBundleIdentifier(bundleIdentifier)
         {
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
+            try await openApplication(url)
+            return
+        }
+        throw CustomWorkspaceAppLaunchError.applicationMissing(app.displayName)
+    }
+
+    @MainActor
+    private static func openApplication(
+        at url: URL,
+        workspace: NSWorkspace
+    ) async throws {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
             workspace.openApplication(
                 at: url,
                 configuration: configuration
             ) { _, error in
-                _ = error
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
             }
-            return
         }
-        throw CustomWorkspaceAppLaunchError.applicationMissing(app.displayName)
     }
 }
 
@@ -921,6 +948,82 @@ enum AgentLaunchError: LocalizedError {
     }
 }
 
+enum AgentProcessCompletionMode: Sendable {
+    case launchGrace(Duration)
+    case waitForTermination
+}
+
+enum AgentProcessRunner {
+    static func run(
+        executableURL: URL,
+        arguments: [String],
+        workingDirectory: URL,
+        agentName: String,
+        completionMode: AgentProcessCompletionMode
+    ) async throws {
+        let process = AgentProcess.make(
+            executableURL: executableURL,
+            arguments: arguments,
+            workingDirectory: workingDirectory
+        )
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        switch completionMode {
+        case let .launchGrace(duration):
+            try process.run()
+            try await Task.sleep(for: duration)
+            guard !process.isRunning else { return }
+            try validateTermination(process, agentName: agentName)
+
+        case .waitForTermination:
+            try Task.checkCancellation()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<Void, Error>) in
+                    process.terminationHandler = { completedProcess in
+                        do {
+                            try validateTermination(
+                                completedProcess,
+                                agentName: agentName
+                            )
+                            continuation.resume()
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                    do {
+                        try process.run()
+                        if Task.isCancelled, process.isRunning {
+                            process.terminate()
+                        }
+                    } catch {
+                        process.terminationHandler = nil
+                        continuation.resume(throwing: error)
+                    }
+                }
+                try Task.checkCancellation()
+            } onCancel: {
+                if process.isRunning {
+                    process.terminate()
+                }
+            }
+        }
+    }
+
+    private static func validateTermination(
+        _ process: Process,
+        agentName: String
+    ) throws {
+        guard process.terminationStatus == 0 else {
+            throw AgentLaunchError.processFailed(
+                agentName: agentName,
+                status: process.terminationStatus
+            )
+        }
+    }
+}
+
 @MainActor
 final class AgentLauncher {
     private let terminalAdapterRegistry: TerminalAdapterRegistry
@@ -959,11 +1062,12 @@ final class AgentLauncher {
             }
 
         case let .process(executableURL, leadingArguments):
-            try await runProcess(
+            try await AgentProcessRunner.run(
                 executableURL: executableURL,
                 arguments: leadingArguments + [projectDirectory.path],
                 workingDirectory: projectDirectory,
-                agentName: agent.displayName
+                agentName: agent.displayName,
+                completionMode: .launchGrace(.milliseconds(300))
             )
 
         case let .terminal(executableURL):
@@ -987,53 +1091,27 @@ final class AgentLauncher {
     ) async throws {
         switch adapter.launchStrategy {
         case let .otty(commandLineURL):
-            try await runProcess(
+            try await AgentProcessRunner.run(
                 executableURL: commandLineURL,
                 arguments: TerminalLaunchCommand.ottyArguments(
                     toolURL: toolURL,
                     projectDirectory: projectDirectory
                 ),
                 workingDirectory: projectDirectory,
-                agentName: agentName
+                agentName: agentName,
+                completionMode: .waitForTermination
             )
         case .terminalAppleScript:
-            try await runProcess(
+            try await AgentProcessRunner.run(
                 executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
                 arguments: TerminalLaunchCommand.terminalAppleScriptArguments(
                     toolURL: toolURL,
                     projectDirectory: projectDirectory
                 ),
                 workingDirectory: projectDirectory,
-                agentName: agentName
+                agentName: agentName,
+                completionMode: .waitForTermination
             )
-        }
-    }
-
-    private func runProcess(
-        executableURL: URL,
-        arguments: [String],
-        workingDirectory: URL,
-        agentName: String
-    ) async throws {
-        let process = AgentProcess.make(
-            executableURL: executableURL,
-            arguments: arguments,
-            workingDirectory: workingDirectory
-        )
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        try process.run()
-
-        try? await Task.sleep(for: .milliseconds(300))
-        guard process.isRunning else {
-            guard process.terminationStatus == 0 else {
-                throw AgentLaunchError.processFailed(
-                    agentName: agentName,
-                    status: process.terminationStatus
-                )
-            }
-            return
         }
     }
 }

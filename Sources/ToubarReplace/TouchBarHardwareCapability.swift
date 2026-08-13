@@ -73,3 +73,14 @@ enum SoftwareWorkspaceLaunchPolicy {
         usesSoftwareWorkspace ? .floating : preferred
     }
 }
+
+enum TouchBarResumeAction: Equatable {
+    case restoreSoftwareWorkspace
+    case restartHardwareCapture
+}
+
+enum TouchBarResumePolicy {
+    static func action(usesSoftwareWorkspace: Bool) -> TouchBarResumeAction {
+        usesSoftwareWorkspace ? .restoreSoftwareWorkspace : .restartHardwareCapture
+    }
+}

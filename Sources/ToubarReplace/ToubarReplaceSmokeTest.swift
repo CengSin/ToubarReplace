@@ -4,7 +4,11 @@ import Foundation
 
 enum ToubarReplaceSmokeTest {
     @MainActor
-    static func failures() -> [String] {
+    static func failures() async -> [String] {
+        enum CustomAppOpenTestError: Error {
+            case rejected
+        }
+
         var failures: [String] = []
 
         expect(
@@ -196,6 +200,31 @@ enum ToubarReplaceSmokeTest {
             "custom app add must append when under capacity",
             failures: &failures
         )
+        let missingCustomApp = CustomWorkspaceApp(
+            bundleIdentifier: "a.missing",
+            applicationPath:
+                "/private/tmp/ToubarReplaceMissingCustomApp-\(UUID().uuidString).app",
+            displayName: "Missing"
+        )
+        let fallbackCustomAppURL = URL(
+            fileURLWithPath: "/Applications/Fallback.app",
+            isDirectory: true
+        )
+        do {
+            try await CustomWorkspaceAppLauncher.open(
+                missingCustomApp,
+                fileManager: .default,
+                resolveBundleIdentifier: { _ in fallbackCustomAppURL },
+                openApplication: { _ in
+                    throw CustomAppOpenTestError.rejected
+                }
+            )
+            failures.append("自定义 App completion error 不得被忽略")
+        } catch CustomAppOpenTestError.rejected {
+            // Expected: completion errors must reach the caller.
+        } catch {
+            failures.append("自定义 App 返回了意外错误：\(error)")
+        }
         expect(
             WorkspaceTouchBarLayout.totalUnits == 10
                 && WorkspaceTouchBarLayout.pathUnits == 4
@@ -634,6 +663,26 @@ enum ToubarReplaceSmokeTest {
                 "Agent subprocess working-directory probe failed: \(error)"
             )
         }
+        do {
+            try await AgentProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "sleep 0.45; exit 7"],
+                workingDirectory: currentDirectory,
+                agentName: "延迟失败测试",
+                completionMode: .waitForTermination
+            )
+            failures.append("等待退出模式不能误判延迟失败为成功")
+        } catch AgentLaunchError.processFailed(_, let status) {
+            expect(
+                status == 7,
+                "必须传播辅助进程的真实退出码",
+                failures: &failures
+            )
+        } catch {
+            failures.append(
+                "辅助进程返回了意外错误：\(error.localizedDescription)"
+            )
+        }
         let testToolURL = URL(fileURLWithPath: "/tmp/Claude Tool/claude")
         let testProjectURL = URL(fileURLWithPath: "/tmp/Project Folder")
         expect(
@@ -918,6 +967,40 @@ enum ToubarReplaceSmokeTest {
                     usesSoftwareWorkspace: false
                 ),
             "software mode must default to Workspace at launch; hardware must not",
+            failures: &failures
+        )
+        expect(
+            TouchBarResumePolicy.action(usesSoftwareWorkspace: true)
+                == .restoreSoftwareWorkspace,
+            "软件 Workspace 唤醒后不能重启捕获流",
+            failures: &failures
+        )
+        expect(
+            TouchBarResumePolicy.action(usesSoftwareWorkspace: false)
+                == .restartHardwareCapture,
+            "物理 Touch Bar 唤醒后必须恢复捕获流",
+            failures: &failures
+        )
+        expect(
+            WorkspaceAsyncSessionPolicy.canUpdate(
+                capturedGeneration: 4,
+                currentGeneration: 4,
+                scene: .workspace
+            ),
+            "当前 Workspace generation 应允许异步回写",
+            failures: &failures
+        )
+        expect(
+            !WorkspaceAsyncSessionPolicy.canUpdate(
+                capturedGeneration: 3,
+                currentGeneration: 4,
+                scene: .workspace
+            ) && !WorkspaceAsyncSessionPolicy.canUpdate(
+                capturedGeneration: 4,
+                currentGeneration: 4,
+                scene: .mirror
+            ),
+            "旧 generation 或已关闭 Workspace 不得异步回写",
             failures: &failures
         )
         expect(

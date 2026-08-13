@@ -295,9 +295,9 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
 @main
 @MainActor
 struct ToubarReplaceMain {
-    static func main() {
+    static func main() async {
         if CommandLine.arguments.contains("--smoke-test") {
-            let failures = ToubarReplaceSmokeTest.failures()
+            let failures = await ToubarReplaceSmokeTest.failures()
             guard failures.isEmpty else {
                 let message = "ToubarReplace smoke test failed:\n"
                     + failures.map { "- \($0)" }.joined(separator: "\n")

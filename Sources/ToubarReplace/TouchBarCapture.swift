@@ -151,6 +151,22 @@ final class TouchBarCapture: @unchecked Sendable {
         category: "TouchBarDisplayStream"
     )
 
+    /// CGDisplayStream requires both a strong retain and a use-count claim when
+    /// a frame surface outlives its callback. Releasing this wrapper makes the
+    /// surface available for WindowServer reuse again.
+    private final class DeferredFrameSurface {
+        let surface: IOSurfaceRef
+
+        init(_ surface: IOSurfaceRef) {
+            self.surface = surface
+            IOSurfaceIncrementUseCount(surface)
+        }
+
+        deinit {
+            IOSurfaceDecrementUseCount(surface)
+        }
+    }
+
     private let workerQueue = DispatchQueue(
         label: "com.toubarreplace.display-stream",
         qos: .userInteractive
@@ -163,7 +179,7 @@ final class TouchBarCapture: @unchecked Sendable {
     private let onError: ErrorHandler
     private var frameIntervalNanoseconds: UInt64
     private var lastDeliveredAt: UInt64 = 0
-    private var pendingFrame: CGImage?
+    private var pendingSurface: DeferredFrameSurface?
     private var pendingFrameDeliveryScheduled = false
     private var pendingFrameDeliveryToken: UInt64 = 0
     private var stream: CGDisplayStream?
@@ -300,15 +316,11 @@ final class TouchBarCapture: @unchecked Sendable {
                 handleBlankFrame()
                 return
             }
-            guard let image = makeImage(from: surface) else {
-                report(.invalidSurface)
-                return
-            }
 
             consecutiveBlackFrames = 0
             firstBlankFrameAt = nil
-            submitFrame(
-                image,
+            submitSurface(
+                surface,
                 at: DispatchTime.now().uptimeNanoseconds,
                 generation: generation
             )
@@ -333,7 +345,7 @@ final class TouchBarCapture: @unchecked Sendable {
     }
 
     private func handleBlankFrame() {
-        pendingFrame = nil
+        pendingSurface = nil
         let timestamp = DispatchTime.now().uptimeNanoseconds
         consecutiveBlackFrames += 1
         if firstBlankFrameAt == nil {
@@ -368,21 +380,21 @@ final class TouchBarCapture: @unchecked Sendable {
         return timestamp - lastDeliveredAt >= frameIntervalNanoseconds
     }
 
-    private func submitFrame(
-        _ image: CGImage,
+    private func submitSurface(
+        _ surface: IOSurfaceRef,
         at timestamp: UInt64,
         generation: UInt64
     ) {
         guard !shouldDeliver(at: timestamp) else {
-            pendingFrame = nil
-            deliverFrame(image, at: timestamp)
+            pendingSurface = nil
+            convertAndDeliver(surface, at: timestamp)
             return
         }
 
         // CGDisplayStream may send a short burst of transition frames and then
-        // stay idle. Keep replacing the pending image so the final stable frame
-        // is delivered instead of being discarded by the FPS limiter.
-        pendingFrame = image
+        // stay idle. Retain only the latest surface so the final stable frame is
+        // rendered after the FPS limiter instead of converting every source frame.
+        pendingSurface = DeferredFrameSurface(surface)
         guard !pendingFrameDeliveryScheduled else { return }
         pendingFrameDeliveryScheduled = true
         pendingFrameDeliveryToken &+= 1
@@ -402,13 +414,24 @@ final class TouchBarCapture: @unchecked Sendable {
                 return
             }
             self.pendingFrameDeliveryScheduled = false
-            guard let pendingFrame = self.pendingFrame else { return }
-            self.pendingFrame = nil
-            self.deliverFrame(
-                pendingFrame,
+            guard let pendingSurface = self.pendingSurface else { return }
+            self.pendingSurface = nil
+            self.convertAndDeliver(
+                pendingSurface.surface,
                 at: DispatchTime.now().uptimeNanoseconds
             )
         }
+    }
+
+    private func convertAndDeliver(
+        _ surface: IOSurfaceRef,
+        at timestamp: UInt64
+    ) {
+        guard let image = makeImage(from: surface) else {
+            report(.invalidSurface)
+            return
+        }
+        deliverFrame(image, at: timestamp)
     }
 
     private func deliverFrame(_ image: CGImage, at timestamp: UInt64) {
@@ -494,7 +517,7 @@ final class TouchBarCapture: @unchecked Sendable {
 
     private func resetFrameDeliveryState() {
         lastDeliveredAt = 0
-        pendingFrame = nil
+        pendingSurface = nil
         pendingFrameDeliveryScheduled = false
         pendingFrameDeliveryToken &+= 1
         consecutiveBlackFrames = 0

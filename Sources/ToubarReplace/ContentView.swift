@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import Foundation
 
 struct TouchBarWindowMetrics {
     static let defaultSize = CGSize(width: 1_150, height: 35)
@@ -44,6 +45,17 @@ enum TouchBarIdleOpacity {
     static let occlusionPollInterval: Duration = .milliseconds(750)
     /// Minimum overlapping area (points²) to count as obscuring content.
     static let minimumOverlapArea: CGFloat = 80
+
+    static func shouldPollOcclusion(isIdle: Bool) -> Bool {
+        isIdle
+    }
+
+    static func targetAlpha(
+        isIdle: Bool,
+        isObscuringOtherAppContent: Bool
+    ) -> CGFloat {
+        isIdle && isObscuringOtherAppContent ? idle : active
+    }
 }
 
 /// One on-screen window entry for occlusion tests (Cocoa coordinates).
@@ -259,11 +271,12 @@ enum WorkspaceAsyncSessionPolicy {
 @MainActor
 final class TouchBarIdleOpacityController {
     private weak var window: NSWindow?
-    private var idleTask: Task<Void, Never>?
+    private let clock = ContinuousClock()
+    private var idleMonitorTask: Task<Void, Never>?
     private var occlusionPollTask: Task<Void, Never>?
     private var occlusionObservers: [NSObjectProtocol] = []
-    /// Idle fade runs only while the mirror covers other apps' content.
-    private var idleFadeEnabled = false
+    private var lastFrameActivityAt: ContinuousClock.Instant?
+    private var isIdle = false
 
     init(window: NSWindow) {
         self.window = window
@@ -271,33 +284,65 @@ final class TouchBarIdleOpacityController {
 
     func start() {
         installOcclusionObservers()
-        refreshOcclusionGate()
         registerFrameActivity()
     }
 
     func stop() {
         removeOcclusionObservers()
+        idleMonitorTask?.cancel()
+        idleMonitorTask = nil
         occlusionPollTask?.cancel()
         occlusionPollTask = nil
-        idleTask?.cancel()
-        idleTask = nil
-        idleFadeEnabled = false
+        lastFrameActivityAt = nil
+        isIdle = false
         window?.alphaValue = TouchBarIdleOpacity.active
     }
 
     func registerFrameActivity() {
-        idleTask?.cancel()
-        window?.alphaValue = TouchBarIdleOpacity.active
-        guard idleFadeEnabled else {
-            idleTask = nil
-            return
+        lastFrameActivityAt = clock.now
+        isIdle = false
+        occlusionPollTask?.cancel()
+        occlusionPollTask = nil
+        if window?.alphaValue != TouchBarIdleOpacity.active {
+            window?.alphaValue = TouchBarIdleOpacity.active
         }
-        idleTask = Task { [weak self] in
-            try? await Task.sleep(for: TouchBarIdleOpacity.delay)
-            guard !Task.isCancelled else { return }
-            guard let self, self.idleFadeEnabled else { return }
-            self.window?.alphaValue = TouchBarIdleOpacity.idle
+        startIdleMonitorIfNeeded()
+    }
+
+    /// One monitor follows the latest activity deadline. Frames only update the
+    /// timestamp; they do not allocate and cancel a new sleeping task.
+    private func startIdleMonitorIfNeeded() {
+        guard idleMonitorTask == nil else { return }
+        idleMonitorTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                guard let observedActivity = self.lastFrameActivityAt else {
+                    self.idleMonitorTask = nil
+                    return
+                }
+                do {
+                    try await self.clock.sleep(
+                        until: observedActivity.advanced(
+                            by: TouchBarIdleOpacity.delay
+                        )
+                    )
+                } catch {
+                    return
+                }
+                guard self.lastFrameActivityAt == observedActivity else {
+                    continue
+                }
+                self.idleMonitorTask = nil
+                self.enterIdleState()
+                return
+            }
         }
+    }
+
+    private func enterIdleState() {
+        isIdle = true
+        refreshOcclusionWhileIdle()
+        startIdleOcclusionPolling()
     }
 
     private func installOcclusionObservers() {
@@ -311,7 +356,7 @@ final class TouchBarIdleOpacityController {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.refreshOcclusionGate()
+                    self?.refreshOcclusionWhileIdle()
                 }
             },
             workspaceCenter.addObserver(
@@ -320,7 +365,7 @@ final class TouchBarIdleOpacityController {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.refreshOcclusionGate()
+                    self?.refreshOcclusionWhileIdle()
                 }
             },
             notificationCenter.addObserver(
@@ -329,7 +374,7 @@ final class TouchBarIdleOpacityController {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.refreshOcclusionGate()
+                    self?.refreshOcclusionWhileIdle()
                 }
             },
         ]
@@ -341,7 +386,7 @@ final class TouchBarIdleOpacityController {
                     queue: .main
                 ) { [weak self] _ in
                     Task { @MainActor [weak self] in
-                        self?.refreshOcclusionGate()
+                        self?.refreshOcclusionWhileIdle()
                     }
                 }
             )
@@ -352,17 +397,26 @@ final class TouchBarIdleOpacityController {
                     queue: .main
                 ) { [weak self] _ in
                     Task { @MainActor [weak self] in
-                        self?.refreshOcclusionGate()
+                        self?.refreshOcclusionWhileIdle()
                     }
                 }
             )
         }
-        occlusionPollTask?.cancel()
-        occlusionPollTask = Task { [weak self] in
+    }
+
+    private func startIdleOcclusionPolling() {
+        guard
+            TouchBarIdleOpacity.shouldPollOcclusion(isIdle: isIdle),
+            occlusionPollTask == nil
+        else {
+            return
+        }
+        occlusionPollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: TouchBarIdleOpacity.occlusionPollInterval)
                 guard !Task.isCancelled else { return }
-                self?.refreshOcclusionGate()
+                guard let self, self.isIdle else { return }
+                self.refreshOcclusionWhileIdle()
             }
         }
     }
@@ -379,22 +433,60 @@ final class TouchBarIdleOpacityController {
         occlusionPollTask = nil
     }
 
-    private func refreshOcclusionGate() {
+    private func refreshOcclusionWhileIdle() {
+        guard isIdle else { return }
         guard let window else { return }
-        let enabled = MirrorWindowOcclusion.isObscuringOtherAppContent(
+        let isObscuring = MirrorWindowOcclusion.isObscuringOtherAppContent(
             mirrorWindow: window
         )
-        guard enabled != idleFadeEnabled else { return }
-        idleFadeEnabled = enabled
-        if enabled {
-            // Started covering other content: restart idle timer from full opacity.
-            registerFrameActivity()
-        } else {
-            // Only desktop / nothing under the mirror: never dim.
-            idleTask?.cancel()
-            idleTask = nil
-            window.alphaValue = TouchBarIdleOpacity.active
+        let targetAlpha = TouchBarIdleOpacity.targetAlpha(
+            isIdle: isIdle,
+            isObscuringOtherAppContent: isObscuring
+        )
+        if window.alphaValue != targetAlpha {
+            window.alphaValue = targetAlpha
         }
+    }
+}
+
+/// Bounds queued UI work when the main actor is temporarily busy. The display
+/// stream can replace `latestImage`, but at most one delivery task is pending.
+final class TouchBarFrameDeliveryCoalescer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let onFrame: @MainActor @Sendable (CGImage) -> Void
+    private var latestImage: CGImage?
+    private var isDeliveryScheduled = false
+
+    @MainActor
+    init(onFrame: @escaping @MainActor @Sendable (CGImage) -> Void) {
+        self.onFrame = onFrame
+    }
+
+    func submit(_ image: CGImage) {
+        lock.lock()
+        latestImage = image
+        guard !isDeliveryScheduled else {
+            lock.unlock()
+            return
+        }
+        isDeliveryScheduled = true
+        lock.unlock()
+
+        Task { @MainActor [weak self] in
+            self?.deliverLatest()
+        }
+    }
+
+    @MainActor
+    private func deliverLatest() {
+        lock.lock()
+        let image = latestImage
+        latestImage = nil
+        isDeliveryScheduled = false
+        lock.unlock()
+
+        guard let image else { return }
+        onFrame(image)
     }
 }
 
@@ -576,13 +668,15 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
 
         let idleOpacityController = TouchBarIdleOpacityController(window: panel)
         self.idleOpacityController = idleOpacityController
+        let frameDelivery = TouchBarFrameDeliveryCoalescer {
+            [weak rootView, weak idleOpacityController] image in
+            rootView?.surfaceView.display(image: image)
+            idleOpacityController?.registerFrameActivity()
+        }
         capture = TouchBarCapture(
             framesPerSecond: TouchBarPreferences.displayFramesPerSecond,
-            onFrame: { [weak rootView, weak idleOpacityController] image in
-                Task { @MainActor in
-                    rootView?.surfaceView.display(image: image)
-                    idleOpacityController?.registerFrameActivity()
-                }
+            onFrame: { image in
+                frameDelivery.submit(image)
             },
             onNotice: { [weak rootView] notice in
                 Task { @MainActor in

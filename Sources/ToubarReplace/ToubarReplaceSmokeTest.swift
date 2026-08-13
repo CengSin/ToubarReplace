@@ -2,6 +2,11 @@ import AppKit
 import CoreGraphics
 import Foundation
 
+@MainActor
+private final class SmokeFrameDeliveryProbe {
+    var deliveredWidths: [Int] = []
+}
+
 enum ToubarReplaceSmokeTest {
     @MainActor
     static func failures() async -> [String] {
@@ -752,6 +757,49 @@ enum ToubarReplaceSmokeTest {
             failures: &failures
         )
         expect(
+            !TouchBarIdleOpacity.shouldPollOcclusion(isIdle: false)
+                && TouchBarIdleOpacity.shouldPollOcclusion(isIdle: true),
+            "occlusion polling must run only after capture becomes idle",
+            failures: &failures
+        )
+        expect(
+            TouchBarIdleOpacity.targetAlpha(
+                isIdle: false,
+                isObscuringOtherAppContent: true
+            ) == TouchBarIdleOpacity.active
+                && TouchBarIdleOpacity.targetAlpha(
+                    isIdle: true,
+                    isObscuringOtherAppContent: true
+                ) == TouchBarIdleOpacity.idle
+                && TouchBarIdleOpacity.targetAlpha(
+                    isIdle: true,
+                    isObscuringOtherAppContent: false
+                ) == TouchBarIdleOpacity.active,
+            "idle opacity must remain active unless idle content is obscured",
+            failures: &failures
+        )
+        if let firstImage = makeTestImage(width: 1),
+            let secondImage = makeTestImage(width: 2),
+            let latestImage = makeTestImage(width: 3)
+        {
+            let probe = SmokeFrameDeliveryProbe()
+            let coalescer = TouchBarFrameDeliveryCoalescer { image in
+                probe.deliveredWidths.append(image.width)
+            }
+            coalescer.submit(firstImage)
+            coalescer.submit(secondImage)
+            coalescer.submit(latestImage)
+            await Task.yield()
+            await Task.yield()
+            expect(
+                probe.deliveredWidths == [3],
+                "main-actor frame delivery must coalesce queued frames to the latest",
+                failures: &failures
+            )
+        } else {
+            failures.append("could not create frame-coalescing smoke-test images")
+        }
+        expect(
             !MirrorWindowOcclusion.isObscurableContentWindow(
                 ownerPID: 42,
                 selfPID: 42,
@@ -1075,5 +1123,18 @@ enum ToubarReplaceSmokeTest {
         if !condition() {
             failures.append(message)
         }
+    }
+
+    private static func makeTestImage(width: Int) -> CGImage? {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        return CGContext(
+            data: nil,
+            width: width,
+            height: 1,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )?.makeImage()
     }
 }

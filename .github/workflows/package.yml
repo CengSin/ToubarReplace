@@ -1,0 +1,164 @@
+# Package ToubarReplace as .app / DMG / PKG via Packaging/build-app.sh.
+#
+# Triggers:
+#   - Manual: Actions → Package → Run workflow
+#   - Tag:    git tag v1.2.3 && git push origin v1.2.3
+#
+# Signing is ad-hoc (same as the local script: codesign --sign -).
+# Developer ID / notarization is intentionally out of scope.
+
+name: Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version for CFBundle / DMG / PKG (e.g. 1.2.3). Empty uses the tag or a CI fallback."
+        required: false
+        type: string
+      create_release:
+        description: "Attach DMG/PKG to a GitHub Release (creates tag v<version> if needed)"
+        required: false
+        type: boolean
+        default: false
+      skip_smoke:
+        description: "Skip Scripts/run-regression.sh (not recommended)"
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build and package
+    runs-on: macos-26
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          swift --version
+          uname -m
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: package-${{ runner.os }}-${{ runner.arch }}-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            package-${{ runner.os }}-${{ runner.arch }}-spm-
+
+      - name: Smoke test
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_smoke != true }}
+        run: Scripts/run-regression.sh
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          raw="${INPUT_VERSION:-}"
+          if [[ -z "$raw" && "${{ github.ref_type }}" == "tag" ]]; then
+            raw="${{ github.ref_name }}"
+          fi
+          raw="${raw#v}"
+          if [[ -z "$raw" ]]; then
+            raw="0.0.${{ github.run_number }}"
+          fi
+          if [[ ! "$raw" =~ ^[0-9]+(\.[0-9]+){0,3}([-+][A-Za-z0-9._-]+)?$ ]]; then
+            echo "error: invalid version '${raw}'" >&2
+            exit 1
+          fi
+          echo "version=${raw}" >> "$GITHUB_OUTPUT"
+          echo "Resolved TOUBAR_VERSION=${raw}"
+
+      - name: Package app, DMG, PKG
+        env:
+          TOUBAR_VERSION: ${{ steps.version.outputs.version }}
+        run: Packaging/build-app.sh
+
+      - name: Verify artifacts
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          app="dist/ToubarReplace.app"
+          binary="${app}/Contents/MacOS/ToubarReplace"
+          dmg="dist/ToubarReplace-${VERSION}.dmg"
+          pkg="dist/ToubarReplace-${VERSION}.pkg"
+
+          [[ -x "$binary" ]] || { echo "error: missing app binary" >&2; exit 1; }
+          [[ -f "$pkg" ]] || { echo "error: missing PKG ${pkg}" >&2; exit 1; }
+
+          echo "== lipo =="
+          lipo -info "$binary" || file "$binary"
+          echo "== plist version =="
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${app}/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${app}/Contents/Info.plist"
+          echo "== artifacts =="
+          ls -lh "$pkg"
+          if [[ -f "$dmg" ]]; then
+            ls -lh "$dmg"
+          else
+            echo "warning: DMG was not produced (hdiutil fallback in build-app.sh)"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToubarReplace-${{ steps.version.outputs.version }}
+          path: |
+            dist/ToubarReplace-${{ steps.version.outputs.version }}.dmg
+            dist/ToubarReplace-${{ steps.version.outputs.version }}.pkg
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create or update GitHub Release
+        if: ${{ github.ref_type == 'tag' || inputs.create_release == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          files=()
+          for candidate in \
+            "dist/ToubarReplace-${VERSION}.dmg" \
+            "dist/ToubarReplace-${VERSION}.pkg"
+          do
+            if [[ -f "$candidate" ]]; then
+              files+=("$candidate")
+            fi
+          done
+          if (( ${#files[@]} == 0 )); then
+            echo "error: no DMG/PKG to attach" >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" \
+              --title "ToubarReplace ${VERSION}" \
+              --generate-notes \
+              --target "${{ github.sha }}"
+          fi

@@ -516,6 +516,32 @@ enum ToubarReplaceSmokeTest {
             failures: &failures
         )
         expect(
+            {
+                let tray = NSRect(x: 0, y: 0, width: 800, height: 30)
+                let idle = WorkspaceTouchBarLayout.trayZoneFrames(tray: tray)
+                let picking = WorkspaceTouchBarLayout.trayZoneFrames(
+                    tray: tray,
+                    pathPreferredWidth: 0
+                )
+                return abs(picking.path.width - idle.path.width) < 0.5
+                    && picking.agents.width > 100
+                    && picking.custom.width > 100
+                    && WorkspaceTouchBarLayout.recentsCancelButtonWidth >= 24
+            }(),
+            "最近项目选择态必须留在目录区，不能吃掉 Agent/自定义",
+            failures: &failures
+        )
+        expect(
+            WorkspaceTouchBarLayout.recentsPillWidth(forTitle: "App")
+                >= WorkspaceTouchBarLayout.minimumRecentsPillWidth
+                && WorkspaceTouchBarLayout.recentsPillWidth(
+                    forTitle: "ToubarReplace"
+                )
+                    > WorkspaceTouchBarLayout.recentsPillWidth(forTitle: "App"),
+            "最近项目胶囊应按标题变宽，且有最小宽度",
+            failures: &failures
+        )
+        expect(
             abs(fullStrip.agents.width - fullStrip.custom.width) <= 1,
             "agents and custom must share the remainder equally",
             failures: &failures
@@ -1008,25 +1034,289 @@ enum ToubarReplaceSmokeTest {
             failures: &failures
         )
         expect(
-            SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
-                usesSoftwareWorkspace: true
-            )
-                && !SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
-                    usesSoftwareWorkspace: false
-                ),
-            "software mode must default to Workspace at launch; hardware must not",
+            WorkspaceStartupScenePolicy.scene(storedRawValue: nil) == .workspace
+                && WorkspaceStartupScenePolicy.scene(storedRawValue: "mirror")
+                    == .mirror
+                && WorkspaceStartupScenePolicy.scene(storedRawValue: "bogus")
+                    == .workspace,
+            "未配置或非法值时启动场景默认为 Workspace",
             failures: &failures
         )
         expect(
-            TouchBarResumePolicy.action(usesSoftwareWorkspace: true)
-                == .restoreSoftwareWorkspace,
+            SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+                usesSoftwareWorkspace: true,
+                preferredScene: .workspace
+            )
+                && SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+                    usesSoftwareWorkspace: false,
+                    preferredScene: .workspace
+                )
+                && !SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+                    usesSoftwareWorkspace: false,
+                    preferredScene: .mirror
+                )
+                && !SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+                    usesSoftwareWorkspace: true,
+                    preferredScene: .mirror
+                ),
+            "启动是否进入 Workspace 只看启动场景偏好，与有无物理栏无关",
+            failures: &failures
+        )
+        expect(
+            SoftwareWorkspaceLaunchPolicy.shouldStartHardwareCapture(
+                usesSoftwareWorkspace: false
+            )
+                && !SoftwareWorkspaceLaunchPolicy.shouldStartHardwareCapture(
+                    usesSoftwareWorkspace: true
+                ),
+            "硬件模式启动 Workspace 仍要开显示流；软件模式不能开",
+            failures: &failures
+        )
+        expect(
+            WorkspaceStartupScenePolicy.defaultAutoCollapse(
+                startupScene: .workspace
+            ) == false
+                && WorkspaceStartupScenePolicy.defaultAutoCollapse(
+                    startupScene: .mirror
+                ),
+            "启动默认 Workspace 时，自动返回镜像应默认关闭",
+            failures: &failures
+        )
+        expect(
+            TouchBarResumePolicy.action(
+                usesSoftwareWorkspace: true,
+                restoreWorkspace: false
+            ) == .restoreSoftwareWorkspace,
             "软件 Workspace 唤醒后不能重启捕获流",
             failures: &failures
         )
         expect(
-            TouchBarResumePolicy.action(usesSoftwareWorkspace: false)
-                == .restartHardwareCapture,
-            "物理 Touch Bar 唤醒后必须恢复捕获流",
+            TouchBarResumePolicy.action(
+                usesSoftwareWorkspace: false,
+                restoreWorkspace: false
+            ) == .restartHardwareCapture,
+            "物理栏从镜像睡眠后只恢复捕获流",
+            failures: &failures
+        )
+        expect(
+            TouchBarResumePolicy.action(
+                usesSoftwareWorkspace: false,
+                restoreWorkspace: true
+            ) == .restoreHardwareWorkspace,
+            "物理栏从 Workspace 睡眠后要重新 present Workspace",
+            failures: &failures
+        )
+        expect(
+            {
+                let first = WorkspaceRecentProjectList.recording(
+                    URL(fileURLWithPath: "/tmp/alpha", isDirectory: true),
+                    at: Date(timeIntervalSince1970: 1),
+                    in: []
+                )
+                let second = WorkspaceRecentProjectList.recording(
+                    URL(fileURLWithPath: "/tmp/beta", isDirectory: true),
+                    at: Date(timeIntervalSince1970: 2),
+                    in: first
+                )
+                let again = WorkspaceRecentProjectList.recording(
+                    URL(fileURLWithPath: "/tmp/alpha", isDirectory: true),
+                    at: Date(timeIntervalSince1970: 3),
+                    in: second
+                )
+                return again.map(\.path) == ["/tmp/alpha", "/tmp/beta"]
+            }(),
+            "最近项目应去重并置顶",
+            failures: &failures
+        )
+        expect(
+            {
+                var items: [WorkspaceRecentProject] = []
+                for name in ["a", "b", "c", "d", "e", "f"] {
+                    items = WorkspaceRecentProjectList.recording(
+                        URL(fileURLWithPath: "/tmp/\(name)", isDirectory: true),
+                        at: Date(timeIntervalSince1970: Double(name.hashValue)),
+                        in: items
+                    )
+                }
+                return items.count == WorkspaceRecentProjectList.maxCount
+                    && items.first?.path == "/tmp/f"
+            }(),
+            "最近项目最多保留 5 条",
+            failures: &failures
+        )
+        expect(
+            {
+                let stored = WorkspaceRecentProjectList.recording(
+                    URL(fileURLWithPath: "/tmp/kept", isDirectory: true),
+                    at: Date(timeIntervalSince1970: 1),
+                    in: []
+                )
+                let removed = WorkspaceRecentProjectList.removing(
+                    path: "/tmp/kept",
+                    from: stored
+                )
+                return removed.isEmpty
+            }(),
+            "设置里移除最近项目后列表应为空",
+            failures: &failures
+        )
+        expect(
+            {
+                let home = URL(fileURLWithPath: "/Users/demo", isDirectory: true)
+                let project = URL(
+                    fileURLWithPath: "/Users/demo/code/app",
+                    isDirectory: true
+                )
+                let stored = [
+                    WorkspaceRecentProject(
+                        path: home.path,
+                        lastUsedAt: Date(timeIntervalSince1970: 2)
+                    ),
+                    WorkspaceRecentProject(
+                        path: project.path,
+                        lastUsedAt: Date(timeIntervalSince1970: 1)
+                    ),
+                ]
+                let existing: Set<String> = [
+                    home.path,
+                    project.path,
+                    "/Users/demo/other",
+                ]
+                let displayed = WorkspaceRecentProjectList.displayURLs(
+                    stored: stored,
+                    homeDirectory: home,
+                    existingDirectory: { url in
+                        existing.contains(url.standardizedFileURL.path)
+                            ? url.standardizedFileURL
+                            : nil
+                    }
+                )
+                let emptyAfterClear = WorkspaceRecentProjectList.displayURLs(
+                    stored: [],
+                    homeDirectory: home,
+                    existingDirectory: { url in
+                        existing.contains(url.standardizedFileURL.path)
+                            ? url.standardizedFileURL
+                            : nil
+                    }
+                )
+                return displayed.map(\.path) == [project.path]
+                    && emptyAfterClear.isEmpty
+            }(),
+            "最近项目展示只显示本机已存列表，清空后不得再出现内容",
+            failures: &failures
+        )
+        expect(
+            {
+                let finder = FrontmostAppContext(
+                    bundleIdentifier: FrontmostAppContext.finderBundleIdentifier,
+                    localizedName: "Finder",
+                    processIdentifier: 1,
+                    capturedAt: Date(timeIntervalSince1970: 1)
+                )
+                let probe = WorkspacePathProbe(
+                    frontmost: finder,
+                    finderDirectory: URL(
+                        fileURLWithPath: "/Users/demo/FinderProj",
+                        isDirectory: true
+                    ),
+                    ottyDirectory: URL(
+                        fileURLWithPath: "/Users/demo/OttyProj",
+                        isDirectory: true
+                    ),
+                    accessibilityDirectory: URL(
+                        fileURLWithPath: "/Users/demo/AXProj",
+                        isDirectory: true
+                    )
+                )
+                let resolved = WorkspacePathResolutionPolicy.resolve(probe)
+                return resolved?.directoryURL.path == "/Users/demo/FinderProj"
+                    && {
+                        if case .frontmostDocument = resolved?.source {
+                            return true
+                        }
+                        return false
+                    }()
+            }(),
+            "Finder 在前台时路径解析必须优先 Finder",
+            failures: &failures
+        )
+        expect(
+            {
+                let otty = FrontmostAppContext(
+                    bundleIdentifier: FrontmostAppContext.ottyBundleIdentifier,
+                    localizedName: "Otty",
+                    processIdentifier: 2,
+                    capturedAt: Date(timeIntervalSince1970: 1)
+                )
+                let probe = WorkspacePathProbe(
+                    frontmost: otty,
+                    finderDirectory: nil,
+                    ottyDirectory: URL(
+                        fileURLWithPath: "/Users/demo/OttyProj",
+                        isDirectory: true
+                    ),
+                    accessibilityDirectory: URL(
+                        fileURLWithPath: "/Users/demo/AXProj",
+                        isDirectory: true
+                    )
+                )
+                let resolved = WorkspacePathResolutionPolicy.resolve(probe)
+                return resolved?.directoryURL.path == "/Users/demo/OttyProj"
+                    && {
+                        if case .otty = resolved?.source {
+                            return true
+                        }
+                        return false
+                    }()
+            }(),
+            "Otty 在前台且能读到 cwd 时使用 Otty 目录",
+            failures: &failures
+        )
+        expect(
+            {
+                let terminal = FrontmostAppContext(
+                    bundleIdentifier: "com.apple.Terminal",
+                    localizedName: "Terminal",
+                    processIdentifier: 3,
+                    capturedAt: Date(timeIntervalSince1970: 1)
+                )
+                let probe = WorkspacePathProbe(
+                    frontmost: terminal,
+                    finderDirectory: nil,
+                    ottyDirectory: URL(
+                        fileURLWithPath: "/Users/demo/OttyProj",
+                        isDirectory: true
+                    ),
+                    accessibilityDirectory: nil
+                )
+                return WorkspacePathResolutionPolicy.resolve(probe) == nil
+            }(),
+            "只有原生 Terminal 且没有辅助功能路径时，不得假装拿到了目录",
+            failures: &failures
+        )
+        expect(
+            {
+                let json = """
+                {"ok":true,"data":[{"active":false,"cwd":"/tmp/other"},{"active":true,"cwd":"/tmp/focused"}]}
+                """.data(using: .utf8)!
+                return OttyDirectoryParser.focusedDirectory(fromJSON: json)?
+                    .path == "/tmp/focused"
+            }(),
+            "Otty pane list JSON 应解析焦点 pane 的 cwd",
+            failures: &failures
+        )
+        expect(
+            {
+                let json = """
+                {"data":{"entries":[{"path":"/tmp/one"},{"path":"/tmp/two"}]}}
+                """.data(using: .utf8)!
+                return OttyDirectoryParser.recentDirectories(
+                    fromJSON: json,
+                    limit: 1
+                ).map(\.path) == ["/tmp/one"]
+            }(),
+            "Otty jump:ls JSON 应按上限截取最近目录",
             failures: &failures
         )
         expect(

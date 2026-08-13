@@ -16,14 +16,48 @@ enum WorkspaceSwitcherDisplayMode: String, CaseIterable {
     }
 }
 
+enum WorkspaceStartupScene: String, CaseIterable {
+    case workspace
+    case mirror
+
+    var title: String {
+        switch self {
+        case .workspace:
+            return "Workspace"
+        case .mirror:
+            return "镜像"
+        }
+    }
+}
+
+enum WorkspaceStartupScenePolicy {
+    static func scene(storedRawValue: String?) -> WorkspaceStartupScene {
+        guard
+            let storedRawValue,
+            let scene = WorkspaceStartupScene(rawValue: storedRawValue)
+        else {
+            return .workspace
+        }
+        return scene
+    }
+
+    static func defaultAutoCollapse(startupScene: WorkspaceStartupScene) -> Bool {
+        startupScene == .mirror
+    }
+}
+
 enum WorkspacePreferences {
     private static let floatingSwitcherKey =
         "ToubarReplace.workspace.floatingSwitcher"
     private static let switcherDisplayModeKey =
         "ToubarReplace.workspace.switcherDisplayMode"
+    private static let startupSceneKey =
+        "ToubarReplace.workspace.startupScene"
     private static let autoCollapseKey =
         "ToubarReplace.workspace.autoCollapse"
     private static let lastPathKey = "ToubarReplace.workspace.lastPath"
+    private static let recentProjectsKey =
+        "ToubarReplace.workspace.recentProjects"
     private static let terminalAdapterKey =
         "ToubarReplace.workspace.terminalAdapter"
 
@@ -61,11 +95,26 @@ enum WorkspacePreferences {
         set { switcherDisplayMode = newValue ? .floating : .touchBar }
     }
 
+    static var startupScene: WorkspaceStartupScene {
+        get {
+            WorkspaceStartupScenePolicy.scene(
+                storedRawValue: UserDefaults.standard.string(
+                    forKey: startupSceneKey
+                )
+            )
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: startupSceneKey)
+        }
+    }
+
     static var autoCollapse: Bool {
         get {
             guard UserDefaults.standard.object(forKey: autoCollapseKey) != nil
             else {
-                return true
+                return WorkspaceStartupScenePolicy.defaultAutoCollapse(
+                    startupScene: startupScene
+                )
             }
             return UserDefaults.standard.bool(forKey: autoCollapseKey)
         }
@@ -74,21 +123,68 @@ enum WorkspacePreferences {
         }
     }
 
-    static var lastPath: URL? {
+    static var recentProjects: [WorkspaceRecentProject] {
         get {
-            guard
-                let path = UserDefaults.standard.string(forKey: lastPathKey),
-                WorkspacePathResolver.existingDirectory(
-                    at: URL(fileURLWithPath: path)
-                ) != nil
-            else {
-                return nil
+            if let data = UserDefaults.standard.data(forKey: recentProjectsKey),
+                let decoded = try? JSONDecoder().decode(
+                    [WorkspaceRecentProject].self,
+                    from: data
+                )
+            {
+                return WorkspaceRecentProjectList.normalized(decoded)
             }
-            return URL(fileURLWithPath: path).standardizedFileURL
+            if let legacy = lastPathFromLegacyKey {
+                return [
+                    WorkspaceRecentProject(path: legacy.path, lastUsedAt: .distantPast)
+                ]
+            }
+            return []
         }
         set {
-            UserDefaults.standard.set(newValue?.path, forKey: lastPathKey)
+            let normalized = WorkspaceRecentProjectList.normalized(newValue)
+            if let data = try? JSONEncoder().encode(normalized) {
+                UserDefaults.standard.set(data, forKey: recentProjectsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: recentProjectsKey)
+            }
+            UserDefaults.standard.set(
+                normalized.first?.path,
+                forKey: lastPathKey
+            )
         }
+    }
+
+    static var lastPath: URL? {
+        get {
+            for project in recentProjects {
+                if let directory = WorkspacePathResolver.existingDirectory(
+                    at: project.url
+                ) {
+                    return directory
+                }
+            }
+            return lastPathFromLegacyKey
+        }
+        set {
+            if let url = newValue {
+                recentProjects = WorkspaceRecentProjectList.recording(
+                    url,
+                    in: recentProjects
+                )
+            }
+        }
+    }
+
+    private static var lastPathFromLegacyKey: URL? {
+        guard
+            let path = UserDefaults.standard.string(forKey: lastPathKey),
+            let directory = WorkspacePathResolver.existingDirectory(
+                at: URL(fileURLWithPath: path)
+            )
+        else {
+            return nil
+        }
+        return directory
     }
 
     static var terminalAdapterID: TerminalAdapterID {
@@ -245,6 +341,77 @@ enum CustomWorkspaceAppList {
     }
 }
 
+struct WorkspaceRecentProject: Codable, Equatable {
+    var path: String
+    var lastUsedAt: Date
+
+    var url: URL {
+        URL(fileURLWithPath: path, isDirectory: true)
+    }
+}
+
+enum WorkspaceRecentProjectList {
+    static let maxCount = 5
+
+    static func normalized(
+        _ projects: [WorkspaceRecentProject]
+    ) -> [WorkspaceRecentProject] {
+        var result: [WorkspaceRecentProject] = []
+        for project in projects.sorted(by: { $0.lastUsedAt > $1.lastUsedAt }) {
+            let path = URL(fileURLWithPath: project.path).standardizedFileURL.path
+            result.removeAll { $0.path == path }
+            result.append(
+                WorkspaceRecentProject(path: path, lastUsedAt: project.lastUsedAt)
+            )
+        }
+        if result.count > maxCount {
+            result = Array(result.prefix(maxCount))
+        }
+        return result
+    }
+
+    static func recording(
+        _ url: URL,
+        at date: Date = Date(),
+        in existing: [WorkspaceRecentProject]
+    ) -> [WorkspaceRecentProject] {
+        var result = normalized(existing)
+        let path = url.standardizedFileURL.path
+        result.removeAll { $0.path == path }
+        result.insert(
+            WorkspaceRecentProject(path: path, lastUsedAt: date),
+            at: 0
+        )
+        return Array(result.prefix(maxCount))
+    }
+
+    static func removing(
+        path: String,
+        from existing: [WorkspaceRecentProject]
+    ) -> [WorkspaceRecentProject] {
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        return normalized(existing).filter { $0.path != standardized }
+    }
+
+    static func displayURLs(
+        stored: [WorkspaceRecentProject],
+        homeDirectory: URL,
+        existingDirectory: (URL) -> URL?
+    ) -> [URL] {
+        let homePath = homeDirectory.standardizedFileURL.path
+        var result: [URL] = []
+        for project in normalized(stored) {
+            guard let directory = existingDirectory(project.url) else { continue }
+            let path = directory.path
+            guard path != homePath else { continue }
+            guard !result.contains(where: { $0.path == path }) else { continue }
+            result.append(directory)
+            if result.count == maxCount { break }
+        }
+        return result
+    }
+}
+
 enum CustomWorkspaceAppLauncher {
     @MainActor
     static func open(
@@ -322,6 +489,7 @@ enum CustomWorkspaceAppLaunchError: LocalizedError {
 
 struct FrontmostAppContext {
     static let finderBundleIdentifier = "com.apple.finder"
+    static let ottyBundleIdentifier = "io.appmakes.otty"
 
     let bundleIdentifier: String?
     let localizedName: String?
@@ -330,6 +498,10 @@ struct FrontmostAppContext {
 
     var isFinder: Bool {
         bundleIdentifier == Self.finderBundleIdentifier
+    }
+
+    var isOtty: Bool {
+        bundleIdentifier == Self.ottyBundleIdentifier
     }
 
     @MainActor
@@ -344,8 +516,9 @@ struct FrontmostAppContext {
     }
 }
 
-enum WorkspacePathSource {
+enum WorkspacePathSource: Equatable {
     case frontmostDocument(appName: String?)
+    case otty
     case recent
     case manual
 
@@ -353,11 +526,200 @@ enum WorkspacePathSource {
         switch self {
         case let .frontmostDocument(appName):
             return appName
+        case .otty:
+            return "Otty"
         case .recent:
             return "最近"
         case .manual:
             return nil
         }
+    }
+}
+
+struct WorkspacePathProbe {
+    var frontmost: FrontmostAppContext
+    var finderDirectory: URL?
+    var ottyDirectory: URL?
+    var accessibilityDirectory: URL?
+}
+
+struct WorkspaceResolvedPath: Equatable {
+    let directoryURL: URL
+    let source: WorkspacePathSource
+}
+
+enum WorkspacePathResolutionPolicy {
+    static func resolve(_ probe: WorkspacePathProbe) -> WorkspaceResolvedPath? {
+        if probe.frontmost.isFinder, let directory = probe.finderDirectory {
+            return WorkspaceResolvedPath(
+                directoryURL: directory,
+                source: .frontmostDocument(appName: probe.frontmost.localizedName)
+            )
+        }
+        if probe.frontmost.isOtty, let directory = probe.ottyDirectory {
+            return WorkspaceResolvedPath(
+                directoryURL: directory,
+                source: .otty
+            )
+        }
+        if let directory = probe.accessibilityDirectory {
+            return WorkspaceResolvedPath(
+                directoryURL: directory,
+                source: .frontmostDocument(appName: probe.frontmost.localizedName)
+            )
+        }
+        return nil
+    }
+}
+
+enum OttyDirectoryParser {
+    static func focusedDirectory(fromJSON data: Data) -> URL? {
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data),
+            let object = root as? [String: Any]
+        else {
+            return nil
+        }
+        let panes: [[String: Any]]
+        if let dataObject = object["data"] as? [[String: Any]] {
+            panes = dataObject
+        } else if let dataObject = object["data"] as? [String: Any],
+            let nested = dataObject["panes"] as? [[String: Any]]
+        {
+            panes = nested
+        } else {
+            return nil
+        }
+        let focused = panes.first { ($0["active"] as? Bool) == true } ?? panes.first
+        guard let path = focused?["cwd"] as? String, !path.isEmpty else {
+            return nil
+        }
+        return WorkspacePathResolver.existingDirectory(
+            at: URL(fileURLWithPath: path, isDirectory: true)
+        ) ?? URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    static func recentDirectories(fromJSON data: Data, limit: Int) -> [URL] {
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data),
+            let object = root as? [String: Any]
+        else {
+            return []
+        }
+        let entries: [[String: Any]]
+        if let dataObject = object["data"] as? [String: Any],
+            let listed = dataObject["entries"] as? [[String: Any]]
+        {
+            entries = listed
+        } else if let listed = object["entries"] as? [[String: Any]] {
+            entries = listed
+        } else {
+            return []
+        }
+        var result: [URL] = []
+        for entry in entries {
+            guard let path = entry["path"] as? String, !path.isEmpty else {
+                continue
+            }
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+                .standardizedFileURL
+            if !result.contains(where: { $0.path == url.path }) {
+                result.append(url)
+            }
+            if result.count == limit {
+                break
+            }
+        }
+        return result
+    }
+}
+
+struct OttyDirectoryReader {
+    var commandLineURL: URL?
+    var runJSON: (URL, [String]) -> Data?
+
+    func focusedDirectory() -> URL? {
+        guard
+            let commandLineURL,
+            let data = runJSON(commandLineURL, ["--json", "pane", "list"])
+        else {
+            return nil
+        }
+        return OttyDirectoryParser.focusedDirectory(fromJSON: data)
+    }
+
+    func recentDirectories(limit: Int = WorkspaceRecentProjectList.maxCount)
+        -> [URL]
+    {
+        guard
+            let commandLineURL,
+            let data = runJSON(
+                commandLineURL,
+                ["--json", "jump:ls", String(limit)]
+            )
+        else {
+            return []
+        }
+        return OttyDirectoryParser.recentDirectories(fromJSON: data, limit: limit)
+    }
+
+    static func makeDefault(
+        fileManager: FileManager = .default,
+        workspace: NSWorkspace = .shared
+    ) -> OttyDirectoryReader {
+        OttyDirectoryReader(
+            commandLineURL: Self.commandLineURL(
+                fileManager: fileManager,
+                workspace: workspace
+            ),
+            runJSON: Self.runJSON(executableURL:arguments:)
+        )
+    }
+
+    static func commandLineURL(
+        fileManager: FileManager = .default,
+        workspace: NSWorkspace = .shared
+    ) -> URL? {
+        let applicationURL = workspace.urlForApplication(
+            withBundleIdentifier: FrontmostAppContext.ottyBundleIdentifier
+        ) ?? fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications/Otty.app", isDirectory: true)
+        let candidates = [
+            applicationURL,
+            URL(fileURLWithPath: "/Applications/Otty.app", isDirectory: true),
+        ].compactMap { $0 }
+        for applicationURL in candidates {
+            let commandLineURL = applicationURL.appendingPathComponent(
+                "Contents/MacOS/otty-cli"
+            )
+            if fileManager.isExecutableFile(atPath: commandLineURL.path) {
+                return commandLineURL
+            }
+        }
+        return nil
+    }
+
+    static func runJSON(executableURL: URL, arguments: [String]) -> Data? {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let deadline = Date().addingTimeInterval(1.2)
+        while process.isRunning, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        if process.isRunning {
+            process.terminate()
+            return nil
+        }
+        return pipe.fileHandleForReading.readDataToEndOfFile()
     }
 }
 
@@ -409,43 +771,51 @@ final class FinderPathResolver {
 final class WorkspacePathResolver {
     private let fileManager: FileManager
     private let finderPathResolver: FinderPathResolver
+    private let ottyDirectoryProvider: () -> URL?
 
     init(
         fileManager: FileManager = .default,
-        finderPathResolver: FinderPathResolver = FinderPathResolver()
+        finderPathResolver: FinderPathResolver = FinderPathResolver(),
+        ottyDirectoryProvider: @escaping () -> URL? = {
+            OttyDirectoryReader.makeDefault().focusedDirectory()
+        }
     ) {
         self.fileManager = fileManager
         self.finderPathResolver = finderPathResolver
+        self.ottyDirectoryProvider = ottyDirectoryProvider
     }
 
     func resolveFrontmostPath(
         from context: FrontmostAppContext
     ) -> WorkspaceContext? {
-        if context.isFinder {
-            guard let directoryURL = finderPathResolver.currentDirectoryURL()
-            else {
-                return nil
-            }
-            return WorkspaceContext(
-                directoryURL: directoryURL,
-                source: .frontmostDocument(appName: context.localizedName),
-                frontmostApplication: context
-            )
-        }
-
-        guard
+        let finderDirectory = context.isFinder
+            ? finderPathResolver.currentDirectoryURL()
+            : nil
+        let ottyDirectory = context.isOtty ? ottyDirectoryProvider() : nil
+        let accessibilityDirectory: URL?
+        if !context.isFinder, !context.isOtty,
             let processIdentifier = context.processIdentifier,
             let documentURL = accessibilityDocumentURL(
                 processIdentifier: processIdentifier
-            ),
-            let directoryURL = projectDirectory(for: documentURL)
-        else {
-            return nil
+            )
+        {
+            accessibilityDirectory = projectDirectory(for: documentURL)
+        } else {
+            accessibilityDirectory = nil
         }
 
+        let probe = WorkspacePathProbe(
+            frontmost: context,
+            finderDirectory: finderDirectory,
+            ottyDirectory: ottyDirectory,
+            accessibilityDirectory: accessibilityDirectory
+        )
+        guard let resolved = WorkspacePathResolutionPolicy.resolve(probe) else {
+            return nil
+        }
         return WorkspaceContext(
-            directoryURL: directoryURL,
-            source: .frontmostDocument(appName: context.localizedName),
+            directoryURL: resolved.directoryURL,
+            source: resolved.source,
             frontmostApplication: context
         )
     }

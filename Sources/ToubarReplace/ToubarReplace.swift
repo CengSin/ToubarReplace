@@ -91,71 +91,7 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func showSettings() {
         if settingsWindowController == nil {
-            settingsWindowController = TouchBarSettingsWindowController(
-                currentPosition: windowController?.displayPosition
-                    ?? TouchBarPreferences.displayPosition,
-                currentCustomTopLeft: windowController?.customTopLeft
-                    ?? (TouchBarPreferences.hasCustomTopLeft
-                        ? TouchBarPreferences.customTopLeft
-                        : .zero),
-                currentPixelSize: windowController?.mirrorPixelSize
-                    ?? TouchBarPreferences.mirrorPixelSize,
-                currentFramesPerSecond: windowController?.displayFramesPerSecond
-                    ?? TouchBarPreferences.displayFramesPerSecond,
-                currentWorkspaceSwitcherFloats:
-                    windowController?.workspaceSwitcherFloats
-                    ?? WorkspacePreferences.floatingSwitcher,
-                currentWorkspaceAutoCollapse:
-                    windowController?.workspaceAutoCollapse
-                    ?? WorkspacePreferences.autoCollapse,
-                terminalAdapters:
-                    windowController?.availableTerminalAdapters ?? [],
-                currentTerminalAdapterID:
-                    windowController?.workspaceTerminalAdapterID
-                    ?? WorkspacePreferences.terminalAdapterID,
-                onPositionChanged: { [weak self] position in
-                    self?.windowController?.setDisplayPosition(position)
-                    if let topLeft = self?.windowController?.customTopLeft {
-                        self?.settingsWindowController?.updateCustomTopLeft(
-                            topLeft
-                        )
-                    }
-                },
-                onCustomTopLeftChanged: { [weak self] topLeft in
-                    self?.windowController?.setCustomTopLeft(topLeft)
-                },
-                onWorkspaceFloatingSwitcherChanged: { [weak self] floats in
-                    self?.windowController?.setWorkspaceSwitcherFloats(floats)
-                },
-                onWorkspaceAutoCollapseChanged: { [weak self] autoCollapse in
-                    self?.windowController?.setWorkspaceAutoCollapse(
-                        autoCollapse
-                    )
-                },
-                onTerminalAdapterChanged: { [weak self] adapterID in
-                    self?.windowController?.setWorkspaceTerminalAdapterID(
-                        adapterID
-                    )
-                },
-                onPixelSizeChanged: { [weak self] pixelSize in
-                    self?.windowController?.setMirrorPixelSize(pixelSize)
-                },
-                onFramesPerSecondChanged: { [weak self] framesPerSecond in
-                    self?.windowController?.setDisplayFramesPerSecond(
-                        framesPerSecond
-                    )
-                },
-                onPickApplication: { [weak self] completion in
-                    self?.chooseCustomApplication(completion: completion)
-                },
-                onCustomAppsChanged: { [weak self] in
-                    self?.windowController?.reloadCustomAppsFromPreferences()
-                },
-                onWindowClosed: { [weak self] in
-                    NSApp.setActivationPolicy(.accessory)
-                    self?.windowController?.ensurePhysicalSwitcherPresented()
-                }
-            )
+            settingsWindowController = makeSettingsWindowController()
             windowController?.onCustomTopLeftChanged = {
                 [weak self] topLeft in
                 self?.settingsWindowController?.updateCustomTopLeft(topLeft)
@@ -164,6 +100,7 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
         // Refresh pin list if settings was already open (e.g. preferences
         // changed externally); always re-show the window.
         settingsWindowController?.reloadCustomAppsRows()
+        settingsWindowController?.reloadRecentsRows()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindowController?.window?.makeKeyAndOrderFront(nil)
@@ -176,6 +113,81 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.windowController?.suppressPhysicalSwitcherCloseBox()
         }
+    }
+
+    private func makeSettingsWindowController()
+        -> TouchBarSettingsWindowController
+    {
+        let position = windowController?.displayPosition
+            ?? TouchBarPreferences.displayPosition
+        let customTopLeft = windowController?.customTopLeft
+            ?? (TouchBarPreferences.hasCustomTopLeft
+                ? TouchBarPreferences.customTopLeft
+                : .zero)
+        let pixelSize = windowController?.mirrorPixelSize
+            ?? TouchBarPreferences.mirrorPixelSize
+        let framesPerSecond = windowController?.displayFramesPerSecond
+            ?? TouchBarPreferences.displayFramesPerSecond
+        let switcherFloats = windowController?.workspaceSwitcherFloats
+            ?? WorkspacePreferences.floatingSwitcher
+        let startupScene = windowController?.workspaceStartupScene
+            ?? WorkspacePreferences.startupScene
+        let autoCollapse = windowController?.workspaceAutoCollapse
+            ?? WorkspacePreferences.autoCollapse
+        let adapters = windowController?.availableTerminalAdapters ?? []
+        let adapterID = windowController?.workspaceTerminalAdapterID
+            ?? WorkspacePreferences.terminalAdapterID
+        return TouchBarSettingsWindowController(
+            currentPosition: position,
+            currentCustomTopLeft: customTopLeft,
+            currentPixelSize: pixelSize,
+            currentFramesPerSecond: framesPerSecond,
+            currentWorkspaceSwitcherFloats: switcherFloats,
+            currentWorkspaceStartupScene: startupScene,
+            currentWorkspaceAutoCollapse: autoCollapse,
+            terminalAdapters: adapters,
+            currentTerminalAdapterID: adapterID,
+            onPositionChanged: { [weak self] position in
+                self?.windowController?.setDisplayPosition(position)
+                if let topLeft = self?.windowController?.customTopLeft {
+                    self?.settingsWindowController?.updateCustomTopLeft(topLeft)
+                }
+            },
+            onCustomTopLeftChanged: { [weak self] topLeft in
+                self?.windowController?.setCustomTopLeft(topLeft)
+            },
+            onWorkspaceFloatingSwitcherChanged: { [weak self] floats in
+                self?.windowController?.setWorkspaceSwitcherFloats(floats)
+            },
+            onWorkspaceStartupSceneChanged: { [weak self] scene in
+                self?.windowController?.setWorkspaceStartupScene(scene)
+            },
+            onWorkspaceAutoCollapseChanged: { [weak self] autoCollapse in
+                self?.windowController?.setWorkspaceAutoCollapse(autoCollapse)
+            },
+            onRecentsChanged: {},
+            onTerminalAdapterChanged: { [weak self] adapterID in
+                self?.windowController?.setWorkspaceTerminalAdapterID(adapterID)
+            },
+            onPixelSizeChanged: { [weak self] pixelSize in
+                self?.windowController?.setMirrorPixelSize(pixelSize)
+            },
+            onFramesPerSecondChanged: { [weak self] framesPerSecond in
+                self?.windowController?.setDisplayFramesPerSecond(
+                    framesPerSecond
+                )
+            },
+            onPickApplication: { [weak self] completion in
+                self?.chooseCustomApplication(completion: completion)
+            },
+            onCustomAppsChanged: { [weak self] in
+                self?.windowController?.reloadCustomAppsFromPreferences()
+            },
+            onWindowClosed: { [weak self] in
+                NSApp.setActivationPolicy(.accessory)
+                self?.windowController?.ensurePhysicalSwitcherPresented()
+            }
+        )
     }
 
     @objc

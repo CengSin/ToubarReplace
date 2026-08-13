@@ -294,6 +294,9 @@ final class WorkspaceBarView: NSView {
     private var context: WorkspaceContext?
 
     var onResolvePath: (() -> Void)?
+    var onSelectRecentProject: ((URL) -> Void)?
+    var onBrowseWorkspaceDirectory: (() -> Void)?
+    var onCancelPathPicker: (() -> Void)?
     var onAgentActivated: ((AvailableAgent) -> Void)? {
         didSet {
             agentIconRow.onAgentActivated = onAgentActivated
@@ -323,6 +326,15 @@ final class WorkspaceBarView: NSView {
 
         pathView.onActivate = { [weak self] in
             self?.onResolvePath?()
+        }
+        pathView.onSelectRecent = { [weak self] url in
+            self?.onSelectRecentProject?(url)
+        }
+        pathView.onBrowse = { [weak self] in
+            self?.onBrowseWorkspaceDirectory?()
+        }
+        pathView.onCancel = { [weak self] in
+            self?.onCancelPathPicker?()
         }
         addSubview(pathView)
 
@@ -376,7 +388,8 @@ final class WorkspaceBarView: NSView {
         // Path plate hugs title and is centered in the path zone.
         let tray = WorkspaceTouchBarLayout.trayFrame(in: bounds)
         trayView.frame = tray
-        let pathPreferred = pathView.preferredPillWidth
+        let fillsPathZone = pathView.fillsPathZone
+        let pathPreferred = fillsPathZone ? 0 : pathView.preferredPillWidth
         let regions = WorkspaceTouchBarLayout.regionFrames(
             in: tray,
             pathPreferredWidth: pathPreferred
@@ -386,13 +399,22 @@ final class WorkspaceBarView: NSView {
             tray.height - WorkspaceTouchBarLayout.slotVerticalInset * 2,
             22
         )
-        let pathPlateWidth = min(max(pathPreferred, 1), pathInner.width)
-        pathView.frame = NSRect(
-            x: floor(pathInner.midX - pathPlateWidth / 2),
-            y: tray.midY - pathHeight / 2,
-            width: pathPlateWidth,
-            height: pathHeight
-        )
+        if fillsPathZone {
+            pathView.frame = NSRect(
+                x: pathInner.minX,
+                y: tray.midY - pathHeight / 2,
+                width: pathInner.width,
+                height: pathHeight
+            )
+        } else {
+            let pathPlateWidth = min(max(pathPreferred, 1), pathInner.width)
+            pathView.frame = NSRect(
+                x: floor(pathInner.midX - pathPlateWidth / 2),
+                y: tray.midY - pathHeight / 2,
+                width: pathPlateWidth,
+                height: pathHeight
+            )
+        }
 
         let agentsInner = WorkspaceTouchBarLayout.zoneContentRect(regions.agents)
         let customInner = WorkspaceTouchBarLayout.zoneContentRect(regions.custom)
@@ -454,6 +476,11 @@ final class WorkspaceBarView: NSView {
             )
         }
         agentIconRow.display(agents: [])
+        needsLayout = true
+    }
+
+    func showRecents(_ urls: [URL]) {
+        pathView.displayRecents(urls)
         needsLayout = true
     }
 

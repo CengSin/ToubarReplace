@@ -599,6 +599,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private var hasRestoredFrame = false
     private var workspaceObservers: [NSObjectProtocol] = []
     private var finderSyncTask: Task<Void, Never>?
+    private var resumeToWorkspace = false
     private var isRunning = false
     private var lastFrontmostContext: FrontmostAppContext?
     private var currentWorkspaceContext: WorkspaceContext?
@@ -715,13 +716,26 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         showFloatingWorkspaceSwitcherIfNeeded()
         idleOpacityController.start()
 
-        if SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+        let enterWorkspace =
+            SoftwareWorkspaceLaunchPolicy.shouldEnterWorkspaceAtLaunch(
+                usesSoftwareWorkspace: usesSoftwareWorkspace,
+                preferredScene: WorkspacePreferences.startupScene
+            )
+        if SoftwareWorkspaceLaunchPolicy.shouldStartHardwareCapture(
             usesSoftwareWorkspace: usesSoftwareWorkspace
         ) {
-            // No physical bar: skip display stream + system modal; open Workspace.
-            enterSoftwareWorkspace(isLaunch: true)
-        } else {
             capture.start()
+        }
+        if enterWorkspace {
+            if usesSoftwareWorkspace {
+                enterSoftwareWorkspace(isLaunch: true)
+            } else {
+                enterHardwareWorkspace(isLaunch: true)
+            }
+        } else {
+            if usesSoftwareWorkspace {
+                rootView.surfaceView.displaySoftwareWorkspaceIdle()
+            }
             presentPhysicalSwitcherIfNeeded()
             updateMirrorClickThrough()
         }
@@ -887,6 +901,14 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         WorkspacePreferences.autoCollapse = autoCollapse
     }
 
+    var workspaceStartupScene: WorkspaceStartupScene {
+        WorkspacePreferences.startupScene
+    }
+
+    func setWorkspaceStartupScene(_ scene: WorkspaceStartupScene) {
+        WorkspacePreferences.startupScene = scene
+    }
+
     var availableTerminalAdapters: [TerminalAdapter] {
         terminalAdapterRegistry.discover()
     }
@@ -992,6 +1014,15 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         rootView.workspaceView.onResolvePath = { [weak self] in
             self?.chooseWorkspacePath()
         }
+        rootView.workspaceView.onSelectRecentProject = { [weak self] url in
+            self?.selectRecentProject(url)
+        }
+        rootView.workspaceView.onBrowseWorkspaceDirectory = { [weak self] in
+            self?.browseWorkspaceDirectory()
+        }
+        rootView.workspaceView.onCancelPathPicker = { [weak self] in
+            self?.cancelWorkspacePathPicker()
+        }
         rootView.workspaceView.onAgentActivated = { [weak self] agent in
             self?.launch(agent)
         }
@@ -1003,6 +1034,15 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         }
         workspaceTouchBarController.onResolvePath = { [weak self] in
             self?.chooseWorkspacePath()
+        }
+        workspaceTouchBarController.onSelectRecentProject = { [weak self] url in
+            self?.selectRecentProject(url)
+        }
+        workspaceTouchBarController.onBrowseWorkspaceDirectory = { [weak self] in
+            self?.browseWorkspaceDirectory()
+        }
+        workspaceTouchBarController.onCancelPathPicker = { [weak self] in
+            self?.cancelWorkspacePathPicker()
         }
         workspaceTouchBarController.onAgentActivated = { [weak self] agent in
             self?.launch(agent)
@@ -1117,24 +1157,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         rootView.setWorkspaceFallbackVisible(true)
         updateMirrorClickThrough()
 
-        let frontmostContext = lastFrontmostContext
-            ?? FrontmostAppContext.capture()
-        if frontmostContext.isFinder,
-            let finderContext = workspacePathResolver.resolveFrontmostPath(
-                from: frontmostContext
-            )
-        {
-            acceptWorkspaceContext(finderContext)
-        } else if let recentContext = workspacePathResolver.recentContext(
-            frontmostApplication: frontmostContext
-        ) {
-            acceptWorkspaceContext(recentContext)
-        } else {
-            rootView.workspaceView.showIdle(
-                lastPath: WorkspacePreferences.lastPath
-            )
-            resolveWorkspacePath(refreshFrontmostContext: false)
-        }
+        applyInitialWorkspacePath()
         if !isLaunch {
             rootView.scheduleSceneTransitionCoverFade()
         }
@@ -1147,58 +1170,74 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 enterSoftwareWorkspace(isLaunch: false)
                 return
             }
-
-            beginWorkspaceSession()
-            rootView.beginSceneTransitionCover()
-            if lastFrontmostContext == nil {
-                lastFrontmostContext = FrontmostAppContext.capture()
-            }
-            currentWorkspaceContext = nil
-            availableAgents = []
-            rootView.setScene(.workspace)
-            workspaceSwitcherWindowController?.switcherView.setScene(.workspace)
-            // Same idle opacity as mirror (occlusion-gated): activity resets timer.
-            idleOpacityController.registerFrameActivity()
-
-            switcherTouchBarController.dismiss()
-
-            do {
-                try workspaceTouchBarController.present()
-                rootView.setWorkspaceFallbackVisible(false)
-                updateMirrorClickThrough()
-            } catch {
-                rootView.workspaceView.showFailure(
-                    error.localizedDescription,
-                    context: nil,
-                    agents: []
-                )
-                rootView.setWorkspaceFallbackVisible(true)
-                updateMirrorClickThrough()
-                presentPhysicalSwitcherIfNeeded()
-                rootView.scheduleSceneTransitionCoverFade()
-                return
-            }
-
-            let frontmostContext = lastFrontmostContext
-                ?? FrontmostAppContext.capture()
-            if frontmostContext.isFinder,
-                let finderContext = workspacePathResolver.resolveFrontmostPath(
-                    from: frontmostContext
-                )
-            {
-                acceptWorkspaceContext(finderContext)
-            } else if let recentContext = workspacePathResolver.recentContext(
-                frontmostApplication: frontmostContext
-            ) {
-                acceptWorkspaceContext(recentContext)
-            } else {
-                workspaceTouchBarController.showIdle(lastPath: nil)
-                resolveWorkspacePath(refreshFrontmostContext: false)
-            }
-            rootView.scheduleSceneTransitionCoverFade()
+            enterHardwareWorkspace(isLaunch: false)
         case .workspace:
             closeWorkspace()
         }
+    }
+
+    private func enterHardwareWorkspace(isLaunch: Bool) {
+        beginWorkspaceSession()
+        if !isLaunch {
+            rootView.beginSceneTransitionCover()
+        }
+        if lastFrontmostContext == nil {
+            lastFrontmostContext = FrontmostAppContext.capture()
+        }
+        currentWorkspaceContext = nil
+        availableAgents = []
+        rootView.setScene(.workspace)
+        workspaceSwitcherWindowController?.switcherView.setScene(.workspace)
+        idleOpacityController.registerFrameActivity()
+        switcherTouchBarController.dismiss()
+
+        do {
+            try workspaceTouchBarController.present()
+            rootView.setWorkspaceFallbackVisible(false)
+            updateMirrorClickThrough()
+        } catch {
+            rootView.workspaceView.showFailure(
+                error.localizedDescription,
+                context: nil,
+                agents: []
+            )
+            rootView.setWorkspaceFallbackVisible(true)
+            updateMirrorClickThrough()
+            presentPhysicalSwitcherIfNeeded()
+            if !isLaunch {
+                rootView.scheduleSceneTransitionCoverFade()
+            }
+            return
+        }
+
+        applyInitialWorkspacePath()
+        if !isLaunch {
+            rootView.scheduleSceneTransitionCoverFade()
+        }
+    }
+
+    private func applyInitialWorkspacePath() {
+        let frontmostContext = lastFrontmostContext
+            ?? FrontmostAppContext.capture()
+        lastFrontmostContext = frontmostContext
+        if let context = workspacePathResolver.resolveFrontmostPath(
+            from: frontmostContext
+        ) {
+            acceptWorkspaceContext(context)
+            return
+        }
+        if let recentContext = workspacePathResolver.recentContext(
+            frontmostApplication: frontmostContext
+        ) {
+            acceptWorkspaceContext(recentContext)
+            return
+        }
+        rootView.workspaceView.showIdle(
+            lastPath: WorkspacePreferences.lastPath
+        )
+        workspaceTouchBarController.showIdle(
+            lastPath: WorkspacePreferences.lastPath
+        )
     }
 
     private func closeWorkspace() {
@@ -1262,18 +1301,67 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private func chooseWorkspacePath() {
         let frontmostContext = FrontmostAppContext.capture()
         lastFrontmostContext = frontmostContext
-        workspaceTouchBarController.showResolving()
-        rootView.workspaceView.showResolving()
-
-        if frontmostContext.isFinder,
-            let context = workspacePathResolver.resolveFrontmostPath(
-                from: frontmostContext
-            )
-        {
-            acceptWorkspaceContext(context)
+        let recents = recentProjectURLsForDisplay()
+        if recents.isEmpty {
+            requestWorkspaceDirectory(frontmostContext: frontmostContext)
             return
         }
-        requestWorkspaceDirectory(frontmostContext: frontmostContext)
+        rootView.workspaceView.showRecents(recents)
+        workspaceTouchBarController.showRecents(recents)
+    }
+
+    private func selectRecentProject(_ directoryURL: URL) {
+        let frontmostContext = lastFrontmostContext
+            ?? FrontmostAppContext.capture()
+        guard
+            let context = workspacePathResolver.manualContext(
+                directoryURL: directoryURL,
+                frontmostApplication: frontmostContext
+            )
+        else {
+            chooseWorkspacePath()
+            return
+        }
+        acceptWorkspaceContext(
+            WorkspaceContext(
+                directoryURL: context.directoryURL,
+                source: .recent,
+                frontmostApplication: frontmostContext
+            )
+        )
+    }
+
+    private func browseWorkspaceDirectory() {
+        requestWorkspaceDirectory(
+            frontmostContext: lastFrontmostContext
+                ?? FrontmostAppContext.capture()
+        )
+    }
+
+    private func cancelWorkspacePathPicker() {
+        if let context = currentWorkspaceContext {
+            rootView.workspaceView.showReady(
+                context: context,
+                agents: availableAgents
+            )
+            workspaceTouchBarController.showReady(
+                context: context,
+                agents: availableAgents
+            )
+            return
+        }
+        rootView.workspaceView.showIdle(lastPath: WorkspacePreferences.lastPath)
+        workspaceTouchBarController.showIdle(
+            lastPath: WorkspacePreferences.lastPath
+        )
+    }
+
+    private func recentProjectURLsForDisplay() -> [URL] {
+        WorkspaceRecentProjectList.displayURLs(
+            stored: WorkspacePreferences.recentProjects,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            existingDirectory: WorkspacePathResolver.existingDirectory(at:)
+        )
     }
 
     func reloadCustomAppsFromPreferences() {
@@ -1496,12 +1584,13 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     queue: .main
                 ) { [weak self] _ in
                     Task { @MainActor [weak self] in
-                        guard self?.isRunning == true else { return }
-                        if self?.rootView.scene == .workspace {
-                            self?.closeWorkspace()
+                        guard let self, self.isRunning else { return }
+                        self.resumeToWorkspace = self.rootView.scene == .workspace
+                        if self.rootView.scene == .workspace {
+                            self.closeWorkspace()
                         }
-                        self?.switcherTouchBarController.dismiss()
-                        self?.capture.stop()
+                        self.switcherTouchBarController.dismiss()
+                        self.capture.stop()
                     }
                 }
             )
@@ -1517,7 +1606,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     Task { @MainActor [weak self] in
                         guard let self, self.isRunning else { return }
                         switch TouchBarResumePolicy.action(
-                            usesSoftwareWorkspace: self.usesSoftwareWorkspace
+                            usesSoftwareWorkspace: self.usesSoftwareWorkspace,
+                            restoreWorkspace: self.resumeToWorkspace
                         ) {
                         case .restoreSoftwareWorkspace:
                             if self.rootView.scene != .workspace {
@@ -1526,7 +1616,13 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                         case .restartHardwareCapture:
                             self.capture.restart()
                             self.presentPhysicalSwitcherIfNeeded()
+                        case .restoreHardwareWorkspace:
+                            self.capture.restart()
+                            if self.rootView.scene != .workspace {
+                                self.enterHardwareWorkspace(isLaunch: true)
+                            }
                         }
+                        self.resumeToWorkspace = false
                     }
                 }
             )
@@ -1550,6 +1646,8 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                         self.rootView.scene == .workspace,
                         activatedBundleIdentifier
                             == FrontmostAppContext.finderBundleIdentifier
+                            || activatedBundleIdentifier
+                                == FrontmostAppContext.ottyBundleIdentifier
                     else {
                         return
                     }
@@ -1573,7 +1671,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                     return
                 }
                 let frontmostContext = FrontmostAppContext.capture()
-                guard frontmostContext.isFinder else { return }
+                guard frontmostContext.isFinder || frontmostContext.isOtty else {
+                    return
+                }
                 guard
                     let context = self.workspacePathResolver
                         .resolveFrontmostPath(from: frontmostContext)

@@ -27,7 +27,7 @@ smoke test 不创建窗口、不连接私有 Touch Bar 显示流，主要验证�
 - 物理 Touch Bar 网格按钮：`SwitcherTouchBarController`，placement `0`，保留 Control Strip。
 - 独立浮窗：`WorkspaceSwitcherWindowController`，短按切换，长按或拖动只调整浮窗位置。
 
-无物理 Touch Bar 时，有效模式固定为独立浮窗。启动后默认进入桌面软件 Workspace；返回说明态或睡眠唤醒都不得启动显示流或呈现 system modal。
+无物理 Touch Bar 时，有效模式固定为独立浮窗。启动场景由设置「启动后进入」决定，默认 Workspace；选镜像则显示无硬件说明态。硬件模式即使启动进入 Workspace 也要先开显示流。睡眠前若在 Workspace，唤醒后恢复 Workspace。软件模式不得启动显示流或呈现 system modal。
 
 镜像有新帧时保持 100% 不透明。仅当窗口遮挡其他 App 内容且约 5 秒没有新帧时降至 30%；浮在空桌面区域上保持 100%。
 
@@ -37,7 +37,7 @@ smoke test 不创建窗口、不连接私有 Touch Bar 显示流，主要验证�
 
 Workspace 是一条 full-width item：左侧返回按钮位于 10 格 tray 之外，tray 基础比例为 Path `4/10`、Agents `3/10`、Custom `3/10`。长目录名可扩展 Path 区，但 Agent 与 Custom 保留最小可用宽度。物理 item 宽度上限是 `1010` 点，避免 Function Row 裁切右侧内容；高度固定约 30 点。
 
-路径优先读取 Finder 前台窗口；其他应用可通过辅助功能读取文档路径，失败时使用最近路径或目录选择面板。Workspace 展开期间切换到 Finder 会延迟同步一次路径。
+路径优先读取 Finder 前台窗口；Otty 在前台时读取焦点 pane 的 cwd（官方 `otty-cli`）。其他应用可通过辅助功能读取文档路径。失败时使用本机最近项目（排除家目录），或点路径区在 4/10 目录区内横向滑动选取。左侧 × 取消。最近项目列表只显示设置里能清空的那份，不再把 Otty `jump:ls` 混进栏上。原生 Terminal 第一版不解析 cwd。Workspace 展开期间切换到 Finder 或 Otty 会延迟同步一次路径。选择态不得占满 tray、不得藏起 Agent/自定义。
 
 Agent 启动方式：
 

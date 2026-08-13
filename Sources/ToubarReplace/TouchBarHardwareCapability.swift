@@ -60,9 +60,19 @@ enum MirrorClickThroughPolicy {
 }
 
 enum SoftwareWorkspaceLaunchPolicy {
-    /// No physical bar → open Workspace immediately at launch.
-    static func shouldEnterWorkspaceAtLaunch(usesSoftwareWorkspace: Bool) -> Bool {
-        usesSoftwareWorkspace
+    /// Launch scene follows the user preference on both hardware and software.
+    static func shouldEnterWorkspaceAtLaunch(
+        usesSoftwareWorkspace: Bool,
+        preferredScene: WorkspaceStartupScene
+    ) -> Bool {
+        _ = usesSoftwareWorkspace
+        return preferredScene == .workspace
+    }
+
+    /// Physical capture stays on whenever the Mac has a usable Touch Bar stack,
+    /// including when launch enters Workspace so switching back to mirror is warm.
+    static func shouldStartHardwareCapture(usesSoftwareWorkspace: Bool) -> Bool {
+        !usesSoftwareWorkspace
     }
 
     /// Effective switcher placement: software mode always uses the floating window.
@@ -77,10 +87,19 @@ enum SoftwareWorkspaceLaunchPolicy {
 enum TouchBarResumeAction: Equatable {
     case restoreSoftwareWorkspace
     case restartHardwareCapture
+    case restoreHardwareWorkspace
 }
 
 enum TouchBarResumePolicy {
-    static func action(usesSoftwareWorkspace: Bool) -> TouchBarResumeAction {
-        usesSoftwareWorkspace ? .restoreSoftwareWorkspace : .restartHardwareCapture
+    static func action(
+        usesSoftwareWorkspace: Bool,
+        restoreWorkspace: Bool
+    ) -> TouchBarResumeAction {
+        if usesSoftwareWorkspace {
+            return .restoreSoftwareWorkspace
+        }
+        return restoreWorkspace
+            ? .restoreHardwareWorkspace
+            : .restartHardwareCapture
     }
 }

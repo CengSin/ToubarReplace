@@ -83,11 +83,38 @@ enum WorkspaceTouchBarLayout {
     /// then grow if `pathPreferredWidth` (plate hug) needs more room so the
     /// folder name is not middle-truncated. Cap expansion so agents|custom
     /// retain ``minimumAgentsCustomWidth``.
+    static let minimumRecentsPillWidth: CGFloat = 96
+    static let recentsPillSpacing: CGFloat = 6
+    static let recentsCancelButtonWidth: CGFloat = 28
+    static let recentsCancelSpacing: CGFloat = 6
+
+    static func recentsPillWidth(forTitle title: String) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        let textWidth = ceil(
+            (title as NSString).boundingRect(
+                with: NSSize(
+                    width: CGFloat.greatestFiniteMagnitude,
+                    height: 40
+                ),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font]
+            ).width
+        )
+        return max(
+            textWidth + WorkspaceTouchBarStyle.horizontalPadding * 2 + 8,
+            minimumRecentsPillWidth
+        )
+    }
+
     static func pathRegionWidth(
         trayWidth: CGFloat,
-        pathPreferredWidth: CGFloat = 0
+        pathPreferredWidth: CGFloat = 0,
+        pathFillsTray: Bool = false
     ) -> CGFloat {
         guard trayWidth > 0 else { return 0 }
+        if pathFillsTray {
+            return floor(trayWidth)
+        }
         let unitShare = floor(
             trayWidth * CGFloat(pathUnits) / CGFloat(totalUnits)
         )
@@ -108,12 +135,14 @@ enum WorkspaceTouchBarLayout {
     /// for long titles); remainder after path is split 1:1 for agents|custom.
     static func trayZoneFrames(
         tray: NSRect,
-        pathPreferredWidth: CGFloat = 0
+        pathPreferredWidth: CGFloat = 0,
+        pathFillsTray: Bool = false
     ) -> (path: NSRect, agents: NSRect, custom: NSRect) {
         let usableWidth = max(tray.width - trayTrailingSafeInset, 0)
         let pathWidth = pathRegionWidth(
             trayWidth: usableWidth,
-            pathPreferredWidth: pathPreferredWidth
+            pathPreferredWidth: pathPreferredWidth,
+            pathFillsTray: pathFillsTray
         )
         let remainder = max(usableWidth - pathWidth, 0)
         // agents:custom = 3:3
@@ -143,7 +172,8 @@ enum WorkspaceTouchBarLayout {
     /// Full-bar strip: switcher (outside grid) + continuous tray.
     static func stripFrames(
         in bounds: NSRect,
-        pathPreferredWidth: CGFloat = 0
+        pathPreferredWidth: CGFloat = 0,
+        pathFillsTray: Bool = false
     ) -> (
         switcher: NSRect,
         tray: NSRect,
@@ -176,7 +206,8 @@ enum WorkspaceTouchBarLayout {
         )
         let zones = trayZoneFrames(
             tray: tray,
-            pathPreferredWidth: pathPreferredWidth
+            pathPreferredWidth: pathPreferredWidth,
+            pathFillsTray: pathFillsTray
         )
         return (switcher, tray, zones.path, zones.agents, zones.custom)
     }
@@ -261,7 +292,8 @@ enum WorkspaceTouchBarLayout {
     /// the return button is in the same view.
     static func regionFrames(
         in bounds: NSRect,
-        pathPreferredWidth: CGFloat = 0
+        pathPreferredWidth: CGFloat = 0,
+        pathFillsTray: Bool = false
     ) -> (
         path: NSRect,
         agents: NSRect,
@@ -269,7 +301,8 @@ enum WorkspaceTouchBarLayout {
     ) {
         trayZoneFrames(
             tray: bounds,
-            pathPreferredWidth: pathPreferredWidth
+            pathPreferredWidth: pathPreferredWidth,
+            pathFillsTray: pathFillsTray
         )
     }
 }
@@ -698,8 +731,9 @@ final class WorkspaceTouchBarContentView: NSView {
         trayView.layer?.contentsScale = scale
         switcherButton.layer?.contentsScale = scale
 
-        let pathPreferred =
-            (pathView as? WorkspaceTouchBarPathView)?.preferredPillWidth ?? 0
+        let typedPath = pathView as? WorkspaceTouchBarPathView
+        let fillsPathZone = typedPath?.fillsPathZone == true
+        let pathPreferred = fillsPathZone ? 0 : (typedPath?.preferredPillWidth ?? 0)
         let strip = WorkspaceTouchBarLayout.stripFrames(
             in: bounds,
             pathPreferredWidth: pathPreferred
@@ -708,21 +742,31 @@ final class WorkspaceTouchBarContentView: NSView {
         trayView.frame = strip.tray
 
         // Path plate hugs title, centered in the (scaled) path zone.
+        // Recents picker fills the whole path zone so multiple names fit.
         let pathInner = WorkspaceTouchBarLayout.zoneContentRect(strip.path)
         let pathHeight = max(
             strip.tray.height - WorkspaceTouchBarLayout.slotVerticalInset * 2,
             22
         )
-        let pathPlateWidth = min(
-            max(pathPreferred, 1),
-            pathInner.width
-        )
-        pathView.frame = NSRect(
-            x: floor(pathInner.midX - pathPlateWidth / 2),
-            y: strip.tray.midY - pathHeight / 2,
-            width: pathPlateWidth,
-            height: pathHeight
-        )
+        if fillsPathZone {
+            pathView.frame = NSRect(
+                x: pathInner.minX,
+                y: strip.tray.midY - pathHeight / 2,
+                width: pathInner.width,
+                height: pathHeight
+            )
+        } else {
+            let pathPlateWidth = min(
+                max(pathPreferred, 1),
+                pathInner.width
+            )
+            pathView.frame = NSRect(
+                x: floor(pathInner.midX - pathPlateWidth / 2),
+                y: strip.tray.midY - pathHeight / 2,
+                width: pathPlateWidth,
+                height: pathHeight
+            )
+        }
 
         let agentsInner = WorkspaceTouchBarLayout.zoneContentRect(strip.agents)
         let customInner = WorkspaceTouchBarLayout.zoneContentRect(strip.custom)
@@ -907,7 +951,18 @@ final class WorkspaceTouchBarPathView: NSView {
     private let actionButton = WorkspaceTransparentHitButton()
     private var isInteractionEnabled = true
     private var showsIcon = true
+    private var recentsMode = false
+    private var recentURLs: [URL] = []
+    private var recentButtons: [WorkspaceChromeButton] = []
+    private let recentsScrollView = NSScrollView()
+    private let recentsDocumentView = NSView()
+    private let cancelButton = WorkspaceChromeButton()
     var onActivate: (() -> Void)?
+    var onSelectRecent: ((URL) -> Void)?
+    var onBrowse: (() -> Void)?
+    var onCancel: (() -> Void)?
+    /// Recents stay inside the path zone (do not take the whole tray).
+    var fillsPathZone: Bool { recentsMode }
 
     /// Content-hugging width for the path pill (before min/max clamp in layout).
     /// Parent uses this to size the plate and optionally grow the path zone so
@@ -970,6 +1025,34 @@ final class WorkspaceTouchBarPathView: NSView {
             self?.applyPathChrome(highlighted: highlighted)
         }
         addSubview(actionButton)
+
+        recentsScrollView.drawsBackground = false
+        recentsScrollView.hasHorizontalScroller = false
+        recentsScrollView.hasVerticalScroller = false
+        recentsScrollView.autohidesScrollers = true
+        recentsScrollView.borderType = .noBorder
+        recentsScrollView.horizontalScrollElasticity = .allowed
+        recentsScrollView.verticalScrollElasticity = .none
+        recentsScrollView.usesPredominantAxisScrolling = true
+        recentsScrollView.documentView = recentsDocumentView
+        recentsScrollView.isHidden = true
+        addSubview(recentsScrollView)
+
+        cancelButton.configureTitleChrome(title: "", toolTip: "取消，返回当前路径")
+        cancelButton.image = NSImage(
+            systemSymbolName: "xmark",
+            accessibilityDescription: "取消"
+        )?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        )
+        cancelButton.imagePosition = .imageOnly
+        cancelButton.imageScaling = .scaleProportionallyDown
+        cancelButton.contentTintColor = WorkspaceTouchBarStyle.primaryTextColor
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelRecents)
+        cancelButton.isHidden = true
+        cancelButton.setAccessibilityLabel("取消")
+        addSubview(cancelButton)
     }
 
     @available(*, unavailable)
@@ -986,6 +1069,42 @@ final class WorkspaceTouchBarPathView: NSView {
             ?? 2
         layer?.contentsScale = contentsScale
         imageView.layer?.contentsScale = contentsScale
+        if recentsMode {
+            actionButton.frame = .zero
+            let cancelWidth = WorkspaceTouchBarLayout.recentsCancelButtonWidth
+            let gap = WorkspaceTouchBarLayout.recentsCancelSpacing
+            cancelButton.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: cancelWidth,
+                height: bounds.height
+            )
+            let scrollX = cancelWidth + gap
+            recentsScrollView.frame = NSRect(
+                x: scrollX,
+                y: 0,
+                width: max(bounds.width - scrollX, 0),
+                height: bounds.height
+            )
+            var x: CGFloat = 0
+            let spacing = WorkspaceTouchBarLayout.recentsPillSpacing
+            let height = max(bounds.height, 1)
+            for button in recentButtons {
+                let width = WorkspaceTouchBarLayout.recentsPillWidth(
+                    forTitle: button.title
+                )
+                button.frame = NSRect(x: x, y: 0, width: width, height: height)
+                x += width + spacing
+            }
+            let contentWidth = max(x - spacing, recentsScrollView.bounds.width)
+            recentsDocumentView.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: contentWidth,
+                height: height
+            )
+            return
+        }
         actionButton.frame = bounds
         let iconSize = WorkspaceTouchBarStyle.iconWidth
         let iconX = WorkspaceTouchBarStyle.horizontalPadding
@@ -1022,6 +1141,12 @@ final class WorkspaceTouchBarPathView: NSView {
     }
 
     private func applyPathChrome(highlighted: Bool) {
+        if recentsMode {
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.borderWidth = 0
+            layer?.cornerRadius = 0
+            return
+        }
         WorkspaceTouchBarStyle.applyItemChrome(
             to: layer,
             highlighted: highlighted,
@@ -1035,6 +1160,13 @@ final class WorkspaceTouchBarPathView: NSView {
         toolTip: String?,
         enabled: Bool
     ) {
+        recentsMode = false
+        clearRecentButtons()
+        recentsScrollView.isHidden = true
+        cancelButton.isHidden = true
+        imageView.isHidden = image == nil
+        titleLabel.isHidden = false
+        actionButton.isHidden = false
         imageView.image = image
         titleLabel.stringValue = title
         self.toolTip = toolTip
@@ -1043,7 +1175,6 @@ final class WorkspaceTouchBarPathView: NSView {
         actionButton.toolTip = toolTip
         alphaValue = enabled ? 1 : 0.42
         showsIcon = image != nil
-        imageView.isHidden = image == nil
         applyPathChrome(highlighted: false)
         needsLayout = true
         setAccessibilityElement(true)
@@ -1052,6 +1183,67 @@ final class WorkspaceTouchBarPathView: NSView {
         actionButton.setAccessibilityLabel(title)
         // Parent three-zone layout depends on preferredPillWidth.
         superview?.needsLayout = true
+    }
+
+    func displayRecents(_ urls: [URL]) {
+        recentsMode = true
+        recentURLs = urls
+        clearRecentButtons()
+        imageView.isHidden = true
+        titleLabel.isHidden = true
+        actionButton.isHidden = true
+        recentsScrollView.isHidden = false
+        cancelButton.isHidden = false
+        isInteractionEnabled = true
+        alphaValue = 1
+        toolTip = "左右滑动选择项目，点 × 取消"
+        for (index, url) in urls.enumerated() {
+            let button = WorkspaceChromeButton()
+            button.configureTitleChrome(
+                title: url.lastPathComponent,
+                toolTip: url.path
+            )
+            button.tag = index
+            button.target = self
+            button.action = #selector(selectRecent(_:))
+            recentsDocumentView.addSubview(button)
+            recentButtons.append(button)
+        }
+        let browse = WorkspaceChromeButton()
+        browse.configureTitleChrome(
+            title: "选取…",
+            toolTip: "选择其他项目文件夹"
+        )
+        browse.target = self
+        browse.action = #selector(browseFolder)
+        recentsDocumentView.addSubview(browse)
+        recentButtons.append(browse)
+        applyPathChrome(highlighted: false)
+        recentsScrollView.contentView.scroll(to: .zero)
+        needsLayout = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.scrollArea)
+        setAccessibilityLabel("最近项目")
+        superview?.needsLayout = true
+    }
+
+    private func clearRecentButtons() {
+        recentButtons.forEach { $0.removeFromSuperview() }
+        recentButtons.removeAll()
+        recentURLs = recentsMode ? recentURLs : []
+    }
+
+    @objc private func selectRecent(_ sender: NSButton) {
+        guard recentURLs.indices.contains(sender.tag) else { return }
+        onSelectRecent?(recentURLs[sender.tag])
+    }
+
+    @objc private func browseFolder() {
+        onBrowse?()
+    }
+
+    @objc private func cancelRecents() {
+        onCancel?()
     }
 }
 
@@ -1135,6 +1327,9 @@ final class WorkspaceTouchBarController: NSObject, NSTouchBarDelegate {
     private(set) var isPresented = false
 
     var onResolvePath: (() -> Void)?
+    var onSelectRecentProject: ((URL) -> Void)?
+    var onBrowseWorkspaceDirectory: (() -> Void)?
+    var onCancelPathPicker: (() -> Void)?
     var onAgentActivated: ((AvailableAgent) -> Void)?
     var onOpenSettings: (() -> Void)?
     var onOpenCustomApp: ((CustomWorkspaceApp) -> Void)?
@@ -1159,6 +1354,15 @@ final class WorkspaceTouchBarController: NSObject, NSTouchBarDelegate {
 
         pathView.onActivate = { [weak self] in
             self?.onResolvePath?()
+        }
+        pathView.onSelectRecent = { [weak self] url in
+            self?.onSelectRecentProject?(url)
+        }
+        pathView.onBrowse = { [weak self] in
+            self?.onBrowseWorkspaceDirectory?()
+        }
+        pathView.onCancel = { [weak self] in
+            self?.onCancelPathPicker?()
         }
 
         agentIconRow.onAgentActivated = { [weak self] agent in
@@ -1258,6 +1462,11 @@ final class WorkspaceTouchBarController: NSObject, NSTouchBarDelegate {
             )
         }
         reloadAgents(enabled: false, placeholder: "选择项目后启动 Agent")
+    }
+
+    func showRecents(_ urls: [URL]) {
+        pathView.displayRecents(urls)
+        contentView.setNeedsRegionLayout()
     }
 
     func showResolving() {

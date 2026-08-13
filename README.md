@@ -59,10 +59,10 @@ TOUBAR_VERSION=1.2.3 Packaging/build-app.sh
 
 ### Workspace（工作区）
 
-通过切换按钮打开 Workspace，再次点击可返回系统 / 镜像模式（有物理栏时呈现在 Touch Bar 上；无物理栏时呈现在桌面镜像窗内并可直接点击）：
+默认启动后进入 Workspace；设置里可将「启动后进入」改回镜像。通过切换按钮或 Workspace 左侧返回可进入镜像，再次点击回到 Workspace（有物理栏时呈现在 Touch Bar 上；无物理栏时呈现在桌面镜像窗内并可直接点击）：
 
 - **切换方式**：有物理 Touch Bar 时，可在设置中选择物理栏网格按钮或可拖动的独立浮窗；二者只显示一个。无物理 Touch Bar 时固定使用独立浮窗。短按浮窗切换，长按或拖动只调整浮窗位置。物理 Workspace 最左侧另有返回控件。
-- **路径区**：Finder 在前台时优先显示当前 Finder 窗口目录；也可点路径区自行选择文件夹。
+- **路径区**：Finder 在前台时优先当前 Finder 窗口目录；Otty 在前台且能读到当前 pane 目录时用 Otty。点路径区可在目录区内左右滑动最近项目（最多 5 条，不含家目录），点 × 取消，或选取其他文件夹。设置里清空后栏上不再显示这些项目。没有 Otty 时仍可用 Finder、辅助功能文档路径、最近项目或手选。
 - **Agent 区**：本机已安装且可启动的工具会显示图标，一点即开，例如：
   - **Codex**
   - **Cursor**
@@ -76,7 +76,7 @@ TOUBAR_VERSION=1.2.3 Packaging/build-app.sh
 
 菜单栏图标可打开：
 
-- **设置…**：展示位置、镜像宽高、帧率、切换按钮位置、Claude Code 所用终端、启动 Agent 后是否自动返回、Workspace 自定义 App 管理等
+- **设置…**：启动后进入 Workspace 或镜像、展示位置、镜像宽高、帧率、切换按钮位置、Claude Code 所用终端、启动 Agent 后是否自动返回、最近项目、Workspace 自定义 App 管理等
 - **帮助…**：使用说明与镜像异常时的恢复建议
 - **退出 ToubarReplace**
 

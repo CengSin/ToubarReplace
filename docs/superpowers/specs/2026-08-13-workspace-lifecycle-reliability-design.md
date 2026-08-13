@@ -1,90 +1,60 @@
-# Workspace Lifecycle Reliability
+# Workspace 生命周期可靠性修复设计
 
-Date: 2026-08-13
+日期：2026-08-13
 
-## Goal
+## 目标
 
-Fix the reviewed software-Workspace wake path, Agent launch races, lost launch
-errors, and stale switcher documentation without changing the two-system-modal
-architecture, Touch Bar placement, or mirror transition timing.
+修复代码审查发现的软件 Workspace 唤醒路径、Agent 启动竞态、启动错误丢失和切换按钮文档过时问题；不改变双 system modal 架构、Touch Bar placement 或镜像过渡时序。
 
-## Scope
+## 范围
 
-### Software Workspace lifecycle
+### 软件 Workspace 生命周期
 
-- Starting and resuming on a Mac without a usable physical Touch Bar must never
-  call `TouchBarCapture.start()` or `TouchBarCapture.restart()`.
-- Sleep and lock notifications may temporarily leave the software Workspace,
-  but the corresponding resume notification must restore its interactive
-  Workspace scene rather than starting a display-stream retry loop.
-- Hardware mode keeps the existing capture restart and physical switcher path.
-- The hardware/software decision remains based only on private-API capability,
-  never CPU architecture.
+- 没有可用物理 Touch Bar 的 Mac 在启动和恢复时，都不得调用 `TouchBarCapture.start()` 或 `TouchBarCapture.restart()`。
+- 睡眠和锁屏通知可以暂时离开软件 Workspace，但相应的恢复通知必须重新进入可交互的软件 Workspace，不得启动显示流重试循环。
+- 硬件模式保留现有的捕获重启和物理切换按钮恢复路径。
+- 硬件/软件模式仍只由私有 API 能力决定，禁止使用 CPU 架构判断。
 
-### Agent launch session ownership
+### Agent 启动任务的会话归属
 
-- Each Workspace entry has a monotonically increasing session generation.
-- Agent launch work and delayed auto-collapse belong to the generation in which
-  they were created.
-- Closing Workspace, stopping the controller, or beginning a newer launch
-  cancels obsolete work.
-- Completion, failure, and auto-collapse update UI only when their generation is
-  still current and Workspace is still open.
-- Closing Workspace must not claim that an uncancelled launch has completed by
-  merely clearing a Boolean flag.
+- 每次进入 Workspace 都生成单调递增的会话 generation。
+- Agent 启动任务和延迟自动收起任务属于创建它们的 generation。
+- 关闭 Workspace、停止控制器或开始更新的启动操作时，取消已经过期的任务。
+- 成功、失败和自动收起仅在 generation 仍为当前值且 Workspace 仍处于打开状态时更新 UI。
+- 关闭 Workspace 不得只通过清除布尔值来假装尚未取消的启动任务已经结束。
 
-### Process completion semantics
+### 进程完成语义
 
-- Direct application launcher commands such as Codex/Cursor retain a short
-  launch grace: surviving the grace period counts as successfully handed off.
-- Terminal adapter helpers (`otty-cli` and `osascript`) are short-lived control
-  commands and must be awaited to termination so nonzero exits propagate to the
-  Workspace failure UI.
-- Cancellation terminates only a still-running helper process created by the
-  current launch operation; it does not terminate an opened Agent application.
+- Codex、Cursor 等直接应用启动命令保留短启动宽限期；超过宽限期仍在运行视为已经成功交接。
+- Terminal adapter 的辅助命令（`otty-cli` 和 `osascript`）是短生命周期控制命令，必须等待真实退出，让非零状态传递到 Workspace 失败 UI。
+- 取消时只终止当前启动操作创建且仍在运行的辅助命令，不终止已经打开的 Agent 应用。
 
-### Custom App errors
+### 自定义 App 错误
 
-- Opening a pinned custom App becomes asynchronous and throwing.
-- Both the saved-path attempt and bundle-identifier fallback propagate the
-  `NSWorkspace` completion error.
-- A missing saved path may use the bundle-identifier fallback. A launch failure
-  at an existing path is reported rather than silently ignored.
-- The existing Workspace context and Agent buttons remain usable after failure.
+- 打开固定的自定义 App 改为异步且可抛错。
+- 保存路径启动和 bundle identifier 回退路径都必须传播 `NSWorkspace` completion error。
+- 保存路径不存在时可以按 bundle identifier 回退；保存路径存在但启动失败时直接报告，不能静默忽略。
+- 启动失败后保留当前 Workspace 路径和 Agent 按钮的可用性。
 
-### Documentation
+### 文档
 
-- User and developer documentation describe only the current switcher choices:
-  physical Touch Bar or independent floating window.
-- Documentation continues to state that the mirror window is click-through and
-  positioned through Settings, not dragged.
+- 用户文档和开发者文档只描述当前两种切换按钮：物理 Touch Bar 或独立浮窗。
+- 文档继续明确镜像窗口点击穿透，通过设置定位，不能拖动。
+- 从本设计开始，仓库内新增或更新的设计、计划和说明使用中文。
 
-## Design
+## 设计
 
-Pure policy helpers will isolate hardware resume behavior and generation checks
-so the smoke test can exercise them without creating windows or touching private
-APIs. `TouchBarWindowController` will own the Agent launch and auto-collapse
-task handles, cancel them at lifecycle boundaries, and guard every asynchronous
-UI write with the captured generation.
+增加纯策略辅助类型，把硬件恢复动作和 generation 有效性判断从窗口/UI 中分离，使 smoke test 无需创建窗口或调用私有 API 就能覆盖关键分支。`TouchBarWindowController` 持有 Agent 启动任务和自动收起任务句柄，在生命周期边界取消任务，并在所有异步 UI 回写前校验捕获的 generation。
 
-`AgentLauncher` will use two explicit completion paths: launch-grace for direct
-Agent commands and termination-waiting for terminal helper commands. Process
-termination will use a cancellation-aware continuation. Custom App opening will
-wrap `NSWorkspace.openApplication` in a checked throwing continuation.
+`AgentLauncher` 使用两条明确的进程完成路径：直接 Agent 命令使用启动宽限期；终端辅助命令等待退出。进程等待通过支持取消的 continuation 完成。自定义 App 启动使用 checked throwing continuation 包装 `NSWorkspace.openApplication`。
 
-No changes are made to `SwitcherTouchBarController`,
-`WorkspaceTouchBarController`, placement `0/1`, `PresentationModeGlobal`
-policy, the 1010-point Workspace cap, or the 221ms transition settle.
+以下内容不变：`SwitcherTouchBarController`、`WorkspaceTouchBarController`、placement `0/1`、`PresentationModeGlobal` 策略、Workspace 1010 点宽度上限、221ms 过渡 settle。
 
-## Verification
+## 验证
 
-- Add failing smoke assertions for software/hardware resume policy and Workspace
-  generation ownership before implementation.
-- Add an asynchronous process regression using a delayed nonzero helper process
-  so the previous 300ms false-success behavior is observable.
-- Add an injected custom-App opener regression proving completion errors reach
-  the caller.
-- Run `Scripts/run-regression.sh`, shell syntax checks, and `git diff --check`.
-- Physical Touch Bar modal behavior remains a required real-hardware manual
-  check because the smoke path does not present private system modals.
+- 实现前先增加会失败的 smoke 断言，覆盖软件/硬件恢复策略和 Workspace generation 归属。
+- 增加异步进程回归：运行延迟后非零退出的辅助进程，让旧有“300ms 后误判成功”能够稳定暴露。
+- 增加可注入的自定义 App opener 回归，证明 completion error 会传递给调用者。
+- 运行 `Scripts/run-regression.sh`、shell 语法检查和 `git diff --check`。
+- 物理 Touch Bar modal 行为仍需真机手测，因为 smoke 路径不会 present 私有 system modal。
 

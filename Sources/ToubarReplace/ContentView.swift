@@ -40,11 +40,18 @@ struct TouchBarWindowMetrics {
 enum TouchBarIdleOpacity {
     static let active: CGFloat = 1
     static let idle: CGFloat = 0.3
-    static let delay: Duration = .seconds(5)
+    static let minimumDelaySeconds = 1
+    static let defaultDelaySeconds = 5
+    static let maximumDelaySeconds = 300
+    static let delay: Duration = .seconds(defaultDelaySeconds)
     /// How often to re-check whether the mirror covers other app content.
     static let occlusionPollInterval: Duration = .milliseconds(750)
     /// Minimum overlapping area (points²) to count as obscuring content.
     static let minimumOverlapArea: CGFloat = 80
+
+    static func clampedDelaySeconds(_ seconds: Int) -> Int {
+        min(max(seconds, minimumDelaySeconds), maximumDelaySeconds)
+    }
 
     static func shouldPollOcclusion(isIdle: Bool) -> Bool {
         isIdle
@@ -68,7 +75,7 @@ struct MirrorOcclusionWindowInfo: Equatable {
     var bundleIdentifier: String?
 }
 
-/// Gates 5s idle transparency: only while the mirror floats over other apps' content.
+/// Gates delayed idle transparency: only while the mirror floats over other apps' content.
 /// Over empty desktop / wallpaper only → stay fully opaque.
 enum MirrorWindowOcclusion {
     /// System UI that should not trigger idle fade when under the mirror.
@@ -277,9 +284,16 @@ final class TouchBarIdleOpacityController {
     private var occlusionObservers: [NSObjectProtocol] = []
     private var lastFrameActivityAt: ContinuousClock.Instant?
     private var isIdle = false
+    private var idleDelay: Duration
 
-    init(window: NSWindow) {
+    init(
+        window: NSWindow,
+        idleDelaySeconds: Int = TouchBarPreferences.idleOpacityDelaySeconds
+    ) {
         self.window = window
+        self.idleDelay = .seconds(
+            TouchBarIdleOpacity.clampedDelaySeconds(idleDelaySeconds)
+        )
     }
 
     func start() {
@@ -309,6 +323,23 @@ final class TouchBarIdleOpacityController {
         startIdleMonitorIfNeeded()
     }
 
+    func setIdleDelaySeconds(_ seconds: Int) {
+        idleDelay = .seconds(
+            TouchBarIdleOpacity.clampedDelaySeconds(seconds)
+        )
+        guard lastFrameActivityAt != nil else { return }
+
+        // Re-evaluate from the latest real frame so this setting takes effect
+        // immediately without counting the settings interaction as activity.
+        idleMonitorTask?.cancel()
+        idleMonitorTask = nil
+        occlusionPollTask?.cancel()
+        occlusionPollTask = nil
+        isIdle = false
+        window?.alphaValue = TouchBarIdleOpacity.active
+        startIdleMonitorIfNeeded()
+    }
+
     /// One monitor follows the latest activity deadline. Frames only update the
     /// timestamp; they do not allocate and cancel a new sleeping task.
     private func startIdleMonitorIfNeeded() {
@@ -323,7 +354,7 @@ final class TouchBarIdleOpacityController {
                 do {
                     try await self.clock.sleep(
                         until: observedActivity.advanced(
-                            by: TouchBarIdleOpacity.delay
+                            by: self.idleDelay
                         )
                     )
                 } catch {
@@ -825,6 +856,16 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         )
         TouchBarPreferences.displayFramesPerSecond = clamped
         capture.updateFramesPerSecond(clamped)
+    }
+
+    var idleOpacityDelaySeconds: Int {
+        TouchBarPreferences.idleOpacityDelaySeconds
+    }
+
+    func setIdleOpacityDelaySeconds(_ seconds: Int) {
+        let clamped = TouchBarIdleOpacity.clampedDelaySeconds(seconds)
+        TouchBarPreferences.idleOpacityDelaySeconds = clamped
+        idleOpacityController.setIdleDelaySeconds(clamped)
     }
 
     var mirrorPixelSize: CGSize {

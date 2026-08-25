@@ -778,8 +778,18 @@ enum ToubarReplaceSmokeTest {
         expect(
             TouchBarIdleOpacity.active == 1
                 && TouchBarIdleOpacity.idle == 0.3
-                && TouchBarIdleOpacity.delay == .seconds(5),
+                && TouchBarIdleOpacity.delay == .seconds(5)
+                && TouchBarIdleOpacity.minimumDelaySeconds == 1
+                && TouchBarIdleOpacity.defaultDelaySeconds == 5
+                && TouchBarIdleOpacity.maximumDelaySeconds == 300,
             "idle-opacity defaults changed unexpectedly",
+            failures: &failures
+        )
+        expect(
+            TouchBarIdleOpacity.clampedDelaySeconds(0) == 1
+                && TouchBarIdleOpacity.clampedDelaySeconds(5) == 5
+                && TouchBarIdleOpacity.clampedDelaySeconds(301) == 300,
+            "idle-opacity delay must stay within the settings range",
             failures: &failures
         )
         expect(

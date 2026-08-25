@@ -454,9 +454,9 @@ enum CustomWorkspaceAppLauncher {
     }
 
     @MainActor
-    private static func openApplication(
+    static func openApplication(
         at url: URL,
-        workspace: NSWorkspace
+        workspace: NSWorkspace = .shared
     ) async throws {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
@@ -999,7 +999,7 @@ enum TerminalAdapterID: String, CaseIterable {
 }
 
 enum TerminalAdapterLaunchStrategy {
-    case otty(commandLineURL: URL)
+    case otty(applicationURL: URL, commandLineURL: URL)
     case terminalAppleScript
 }
 
@@ -1035,7 +1035,10 @@ final class TerminalAdapterRegistry {
                     TerminalAdapter(
                         id: .otty,
                         displayName: "Otty",
-                        launchStrategy: .otty(commandLineURL: commandLineURL)
+                        launchStrategy: .otty(
+                            applicationURL: ottyApplicationURL,
+                            commandLineURL: commandLineURL
+                        )
                     )
                 )
             }
@@ -1460,12 +1463,21 @@ final class AgentLauncher {
         agentName: String
     ) async throws {
         switch adapter.launchStrategy {
-        case let .otty(commandLineURL):
+        case let .otty(applicationURL, commandLineURL):
+            let isRunning = !NSRunningApplication.runningApplications(
+                withBundleIdentifier: "io.appmakes.otty"
+            ).isEmpty
+            if isRunning {
+                try await CustomWorkspaceAppLauncher.openApplication(
+                    at: applicationURL
+                )
+            }
             try await AgentProcessRunner.run(
                 executableURL: commandLineURL,
                 arguments: TerminalLaunchCommand.ottyArguments(
                     toolURL: toolURL,
-                    projectDirectory: projectDirectory
+                    projectDirectory: projectDirectory,
+                    isRunning: isRunning
                 ),
                 workingDirectory: projectDirectory,
                 agentName: agentName,
@@ -1498,13 +1510,24 @@ enum TerminalLaunchCommand {
 
     static func ottyArguments(
         toolURL: URL,
-        projectDirectory: URL
+        projectDirectory: URL,
+        isRunning: Bool
     ) -> [String] {
-        [
-            "open",
+        guard isRunning else {
+            return [
+                "open",
+                "--command",
+                command(toolURL: toolURL),
+                projectDirectory.path,
+            ]
+        }
+        return [
+            "tab",
+            "new",
+            "--cwd",
+            projectDirectory.path,
             "--command",
             command(toolURL: toolURL),
-            projectDirectory.path,
         ]
     }
 
@@ -1520,7 +1543,12 @@ enum TerminalLaunchCommand {
             set terminalWasRunning to application "Terminal" is running
             tell application "Terminal"
                 if terminalWasRunning then
-                    do script shellCommand
+                    if (count of windows) > 0 then
+                        set targetTab to make new tab at end of tabs of front window
+                        do script shellCommand in targetTab
+                    else
+                        do script shellCommand
+                    end if
                 else
                     launch
                     repeat 40 times

@@ -719,14 +719,31 @@ enum ToubarReplaceSmokeTest {
         expect(
             TerminalLaunchCommand.ottyArguments(
                 toolURL: testToolURL,
-                projectDirectory: testProjectURL
+                projectDirectory: testProjectURL,
+                isRunning: true
+            ) == [
+                "tab",
+                "new",
+                "--cwd",
+                "/tmp/Project Folder",
+                "--command",
+                "export PATH='/tmp/Claude Tool':$PATH; exec '/tmp/Claude Tool/claude'",
+            ],
+            "Otty must create an Agent tab in the selected project",
+            failures: &failures
+        )
+        expect(
+            TerminalLaunchCommand.ottyArguments(
+                toolURL: testToolURL,
+                projectDirectory: testProjectURL,
+                isRunning: false
             ) == [
                 "open",
                 "--command",
                 "export PATH='/tmp/Claude Tool':$PATH; exec '/tmp/Claude Tool/claude'",
                 "/tmp/Project Folder",
             ],
-            "Otty launch arguments must preserve the command and project path",
+            "Otty cold launch must not require its control socket",
             failures: &failures
         )
         expect(
@@ -744,8 +761,14 @@ enum ToubarReplaceSmokeTest {
                 && terminalArguments[1].contains("terminalWasRunning")
                 && terminalArguments[1].contains(
                     "do script shellCommand in front window"
+                )
+                && terminalArguments[1].contains(
+                    "make new tab at end of tabs of front window"
+                )
+                && terminalArguments[1].contains(
+                    "do script shellCommand in targetTab"
                 ),
-            "Terminal launch must reuse its initial window when starting",
+            "Terminal launch must reuse its cold-start window or add a tab",
             failures: &failures
         )
         expect(

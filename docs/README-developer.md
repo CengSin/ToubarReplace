@@ -43,7 +43,9 @@ Agent 启动方式：
 
 - Codex：优先执行 `codex app <项目路径>`，没有 CLI 时回退 Codex App。
 - Cursor：优先内置 CLI，再查找 PATH 中的 CLI，最后回退 Cursor App。
-- Claude Code / Grok Build：通过设置选择的 Otty 或 Terminal.app 在项目目录启动。
+- Claude Code / Grok Build：通过设置选择的 Otty 或 Terminal.app 在项目目录启动；终端未运行时启动应用，已运行时在现有窗口中新建标签页，并将终端窗口切到前台。
+
+Otty 冷启动使用 `otty-cli open`；仅在应用已经运行时使用 `tab new`。后者依赖 Otty 控制通道，不能紧跟在 `NSWorkspace.openApplication` 冷启动回调之后调用。
 
 直接 Agent 启动命令使用短启动宽限期；Otty 和 `osascript` 是短生命周期辅助命令，必须等待真实退出并传播非零状态。Agent 启动和自动收起任务绑定 Workspace generation，旧会话任务不得回写或关闭新会话。
 

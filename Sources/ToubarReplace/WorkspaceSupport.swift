@@ -60,6 +60,8 @@ enum WorkspacePreferences {
         "ToubarReplace.workspace.recentProjects"
     private static let terminalAdapterKey =
         "ToubarReplace.workspace.terminalAdapter"
+    private static let terminalApplicationPathKey =
+        "ToubarReplace.workspace.terminalApplicationPath"
 
     /// Preferred location of the Workspace switcher button.
     /// `.touchBar` shows a real touchable button on the hardware Touch Bar.
@@ -187,24 +189,38 @@ enum WorkspacePreferences {
         return directory
     }
 
-    static var terminalAdapterID: TerminalAdapterID {
+    /// The app is chosen explicitly in Settings. Do not fall back to whichever
+    /// supported terminal happens to be installed first.
+    static var terminalApplicationURL: URL? {
         get {
-            guard
-                let rawValue = UserDefaults.standard.string(
-                    forKey: terminalAdapterKey
-                ),
-                let adapterID = TerminalAdapterID(rawValue: rawValue)
-            else {
-                return .otty
-            }
-            return adapterID
+            guard let path = UserDefaults.standard.string(
+                forKey: terminalApplicationPathKey
+            ) else { return nil }
+            return URL(fileURLWithPath: path, isDirectory: true)
         }
         set {
-            UserDefaults.standard.set(
-                newValue.rawValue,
+            if let newValue {
+                UserDefaults.standard.set(
+                    newValue.standardizedFileURL.path,
+                    forKey: terminalApplicationPathKey
+                )
+            } else {
+                UserDefaults.standard.removeObject(
+                    forKey: terminalApplicationPathKey
+                )
+            }
+        }
+    }
+
+    /// Only explicit selections from the former popup are eligible for
+    /// migration. The old implicit `.otty` default must not become a selection.
+    static var legacyTerminalAdapterID: TerminalAdapterID? {
+        guard
+            let rawValue = UserDefaults.standard.string(
                 forKey: terminalAdapterKey
             )
-        }
+        else { return nil }
+        return TerminalAdapterID(rawValue: rawValue)
     }
 
     private static let customAppsKey = "ToubarReplace.workspace.customApps"
@@ -996,16 +1012,19 @@ enum AgentProcess {
 enum TerminalAdapterID: String, CaseIterable {
     case otty
     case terminal
+    case ghostty
 }
 
 enum TerminalAdapterLaunchStrategy {
     case otty(applicationURL: URL, commandLineURL: URL)
     case terminalAppleScript
+    case ghosttyAppleScript
 }
 
 struct TerminalAdapter {
     let id: TerminalAdapterID
     let displayName: String
+    let applicationURL: URL
     let launchStrategy: TerminalAdapterLaunchStrategy
 }
 
@@ -1035,6 +1054,7 @@ final class TerminalAdapterRegistry {
                     TerminalAdapter(
                         id: .otty,
                         displayName: "Otty",
+                        applicationURL: ottyApplicationURL,
                         launchStrategy: .otty(
                             applicationURL: ottyApplicationURL,
                             commandLineURL: commandLineURL
@@ -1053,6 +1073,7 @@ final class TerminalAdapterRegistry {
                 TerminalAdapter(
                     id: .terminal,
                     displayName: "终端 Terminal.app",
+                    applicationURL: terminalApplicationURL,
                     launchStrategy: .terminalAppleScript
                 )
             )
@@ -1061,10 +1082,59 @@ final class TerminalAdapterRegistry {
     }
 
     func selectedAdapter() -> TerminalAdapter? {
-        let adapters = discover()
-        return adapters.first {
-            $0.id == WorkspacePreferences.terminalAdapterID
-        } ?? adapters.first
+        if let selectedURL = WorkspacePreferences.terminalApplicationURL {
+            return adapter(for: selectedURL)
+        }
+
+        // One-time migration from an explicitly stored old popup selection.
+        guard
+            let legacyID = WorkspacePreferences.legacyTerminalAdapterID,
+            let migrated = discover().first(where: { $0.id == legacyID })
+        else { return nil }
+        WorkspacePreferences.terminalApplicationURL = migrated.applicationURL
+        return migrated
+    }
+
+    func adapter(for applicationURL: URL) -> TerminalAdapter? {
+        let standardizedURL = applicationURL.standardizedFileURL
+        switch Bundle(url: standardizedURL)?.bundleIdentifier {
+        case "io.appmakes.otty":
+            let commandLineURL = standardizedURL.appendingPathComponent(
+                "Contents/MacOS/otty-cli"
+            )
+            guard fileManager.isExecutableFile(atPath: commandLineURL.path)
+            else { return nil }
+            return TerminalAdapter(
+                id: .otty,
+                displayName: "Otty",
+                applicationURL: standardizedURL,
+                launchStrategy: .otty(
+                    applicationURL: standardizedURL,
+                    commandLineURL: commandLineURL
+                )
+            )
+        case "com.apple.Terminal":
+            return TerminalAdapter(
+                id: .terminal,
+                displayName: "终端 Terminal.app",
+                applicationURL: standardizedURL,
+                launchStrategy: .terminalAppleScript
+            )
+        case "com.mitchellh.ghostty":
+            let scriptingDefinitionURL = standardizedURL.appendingPathComponent(
+                "Contents/Resources/Ghostty.sdef"
+            )
+            guard fileManager.fileExists(atPath: scriptingDefinitionURL.path)
+            else { return nil }
+            return TerminalAdapter(
+                id: .ghostty,
+                displayName: "Ghostty",
+                applicationURL: standardizedURL,
+                launchStrategy: .ghosttyAppleScript
+            )
+        default:
+            return nil
+        }
     }
 
     private func installedApplication(named name: String) -> URL? {
@@ -1314,7 +1384,7 @@ enum AgentLaunchError: LocalizedError {
         case .projectDirectoryUnavailable:
             return "项目目录已不可用，请重新选择"
         case .terminalAdapterUnavailable:
-            return "没有找到可用的终端应用，请在设置中选择"
+            return "没有可用的终端，请先在设置中选择 Otty、Ghostty 或 Terminal.app"
         case let .processFailed(agentName, status):
             return "\(agentName) 启动失败（状态码 \(status)）"
         }
@@ -1494,6 +1564,17 @@ final class AgentLauncher {
                 agentName: agentName,
                 completionMode: .waitForTermination
             )
+        case .ghosttyAppleScript:
+            try await AgentProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
+                arguments: TerminalLaunchCommand.ghosttyAppleScriptArguments(
+                    toolURL: toolURL,
+                    projectDirectory: projectDirectory
+                ),
+                workingDirectory: projectDirectory,
+                agentName: agentName,
+                completionMode: .waitForTermination
+            )
         }
     }
 }
@@ -1569,6 +1650,41 @@ enum TerminalLaunchCommand {
             "-e",
             script,
             command(toolURL: toolURL),
+            projectDirectory.path,
+        ]
+    }
+
+    static func ghosttyAppleScriptArguments(
+        toolURL: URL,
+        projectDirectory: URL
+    ) -> [String] {
+        let script = """
+        on run argv
+            set commandText to item 1 of argv
+            set projectPath to item 2 of argv
+            set ghosttyWasRunning to application "Ghostty" is running
+            tell application "Ghostty"
+                set cfg to new surface configuration
+                set initial working directory of cfg to projectPath
+                set command of cfg to commandText
+                if ghosttyWasRunning and (count of windows) > 0 then
+                    set targetTab to new tab in front window with configuration cfg
+                    select tab targetTab
+                    focus focused terminal of targetTab
+                else
+                    set targetWindow to new window with configuration cfg
+                    activate window targetWindow
+                end if
+                activate
+            end tell
+        end run
+        """
+        let shellCommand = "/bin/zsh -lc "
+            + shellQuote(command(toolURL: toolURL))
+        return [
+            "-e",
+            script,
+            shellCommand,
             projectDirectory.path,
         ]
     }

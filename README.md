@@ -24,7 +24,7 @@
 
 | 权限 | 用途 |
 |------|------|
-| **自动化（Automation）** | 读取 Finder 当前目录；通过所选终端启动 Claude Code / Grok Build 等 |
+| **自动化（Automation）** | 读取 Finder 当前目录；通过用户选择的终端启动 Claude Code / Grok Build 等 |
 | **辅助功能（Accessibility）** | 解析其他应用的文档路径（可选，增强路径识别） |
 
 系统弹出权限请求时按提示允许即可。菜单栏 → **帮助…** 也可查看恢复与排错说明。
@@ -66,7 +66,7 @@ TOUBAR_VERSION=1.2.3 Packaging/build-app.sh
 - **Agent 区**：本机已安装且可启动的工具会显示图标，一点即开，例如：
   - **Codex**
   - **Cursor**
-  - **Claude Code**（在设置中选择终端，如 Otty 或 Terminal）
+  - **Claude Code**（使用设置中由用户选择的终端 App）
   - **Grok Build**
 - **自定义 App**：最多固定 3 个常用 `.app`。空态点「自定义app」、有应用时点右侧齿轮，均打开**设置**进行新增 / 替换 / 移除；点图标仅打开该应用（不再静默 FIFO 挤掉）。
 
@@ -76,7 +76,7 @@ TOUBAR_VERSION=1.2.3 Packaging/build-app.sh
 
 菜单栏图标可打开：
 
-- **设置…**：启动后进入 Workspace 或镜像、展示位置、镜像宽高、帧率、透明延迟、切换按钮位置、Claude Code 所用终端、启动 Agent 后是否自动返回、最近项目、Workspace 自定义 App 管理等
+- **设置…**：窗口四边和四角均可用鼠标调整大小，调整后的尺寸会保存；可配置启动后进入 Workspace 或镜像、展示位置、镜像宽高、帧率、透明延迟、切换按钮位置、Agent 所用终端、启动 Agent 后是否自动返回、最近项目、Workspace 自定义 App 管理等。终端不会自动选择，需由用户点击“选择 App…”指定 Otty、Ghostty 1.3+ 或系统 Terminal.app
 - **帮助…**：使用说明与镜像异常时的恢复建议
 - **退出 ToubarReplace**
 

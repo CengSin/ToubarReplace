@@ -950,21 +950,16 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         WorkspacePreferences.startupScene = scene
     }
 
-    var availableTerminalAdapters: [TerminalAdapter] {
-        terminalAdapterRegistry.discover()
+    var workspaceTerminalApplicationURL: URL? {
+        terminalAdapterRegistry.selectedAdapter()?.applicationURL
     }
 
-    var workspaceTerminalAdapterID: TerminalAdapterID {
-        terminalAdapterRegistry.selectedAdapter()?.id
-            ?? WorkspacePreferences.terminalAdapterID
+    func setWorkspaceTerminalApplicationURL(_ applicationURL: URL?) {
+        WorkspacePreferences.terminalApplicationURL = applicationURL
     }
 
-    func setWorkspaceTerminalAdapterID(_ adapterID: TerminalAdapterID) {
-        guard availableTerminalAdapters.contains(where: { $0.id == adapterID })
-        else {
-            return
-        }
-        WorkspacePreferences.terminalAdapterID = adapterID
+    func supportsTerminalApplication(at applicationURL: URL) -> Bool {
+        terminalAdapterRegistry.adapter(for: applicationURL) != nil
     }
 
     func windowDidResize(_ notification: Notification) {

@@ -43,7 +43,7 @@ Agent 启动方式：
 
 - Codex：优先执行 `codex app <项目路径>`，没有 CLI 时回退 Codex App。
 - Cursor：优先内置 CLI，再查找 PATH 中的 CLI，最后回退 Cursor App。
-- Claude Code / Grok Build：通过设置选择的 Otty 或 Terminal.app 在项目目录启动；终端未运行时启动应用，已运行时在现有窗口中新建标签页，并将终端窗口切到前台。
+- Claude Code / Grok Build：通过设置中由用户明确选择的 Otty、Ghostty 1.3+ 或 Terminal.app 在项目目录启动；没有选择时不得自动回退到任一已安装终端。Ghostty 使用官方 AppleScript `surface configuration` 设置 cwd/command，并在已有窗口中新建标签页；其余终端沿用各自适配。终端未运行时启动应用，已运行时在现有窗口中新建标签页，并将终端窗口切到前台。
 
 Otty 冷启动使用 `otty-cli open`；仅在应用已经运行时使用 `tab new`。后者依赖 Otty 控制通道，不能紧跟在 `NSWorkspace.openApplication` 冷启动回调之后调用。
 

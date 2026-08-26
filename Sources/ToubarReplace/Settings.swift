@@ -45,6 +45,7 @@ enum TouchBarPreferences {
     private static let customTopLeftYKey = "ToubarReplace.customTopLeftY"
 
     static let mirrorWindowAutosaveName = "ToubarReplaceMirrorWindow"
+    static let settingsWindowAutosaveName = "ToubarReplaceSettingsWindow"
 
     private static let legacyDefaultMirrorPixelSize = CGSize(
         width: 2_008,
@@ -162,14 +163,22 @@ enum TouchBarPreferences {
     }
 }
 
+private final class SettingsDocumentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 @MainActor
-final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelegate {
+final class TouchBarSettingsWindowController: NSWindowController,
+    NSWindowDelegate
+{
     private let positionPopup: NSPopUpButton
     private let originXField: NSTextField
     private let originYField: NSTextField
     private let switcherDisplayModePopup: NSPopUpButton
     private let startupScenePopup: NSPopUpButton
-    private let terminalAdapterPopup: NSPopUpButton
+    private let terminalApplicationNameField: NSTextField
+    private let terminalClearButton: NSButton
+    private var terminalApplicationURL: URL?
     private let widthField: NSTextField
     private let heightField: NSTextField
     private let framesPerSecondField: NSTextField
@@ -183,8 +192,8 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
     private let onWorkspaceStartupSceneChanged: (WorkspaceStartupScene) -> Void
     private let onWorkspaceAutoCollapseChanged: (Bool) -> Void
     private let onRecentsChanged: () -> Void
-    private let terminalAdapters: [TerminalAdapter]
-    private let onTerminalAdapterChanged: (TerminalAdapterID) -> Void
+    private let onPickTerminalApplication: (@escaping (URL?) -> Void) -> Void
+    private let onTerminalApplicationChanged: (URL?) -> Void
     private let onPixelSizeChanged: (CGSize) -> Void
     private let onFramesPerSecondChanged: (Int) -> Void
     private let onIdleOpacityDelayChanged: (Int) -> Void
@@ -201,15 +210,15 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         currentWorkspaceSwitcherFloats: Bool,
         currentWorkspaceStartupScene: WorkspaceStartupScene,
         currentWorkspaceAutoCollapse: Bool,
-        terminalAdapters: [TerminalAdapter],
-        currentTerminalAdapterID: TerminalAdapterID,
+        currentTerminalApplicationURL: URL?,
         onPositionChanged: @escaping (TouchBarDisplayPosition) -> Void,
         onCustomTopLeftChanged: @escaping (CGPoint) -> Void,
         onWorkspaceFloatingSwitcherChanged: @escaping (Bool) -> Void,
         onWorkspaceStartupSceneChanged: @escaping (WorkspaceStartupScene) -> Void,
         onWorkspaceAutoCollapseChanged: @escaping (Bool) -> Void,
         onRecentsChanged: @escaping () -> Void,
-        onTerminalAdapterChanged: @escaping (TerminalAdapterID) -> Void,
+        onPickTerminalApplication: @escaping (@escaping (URL?) -> Void) -> Void,
+        onTerminalApplicationChanged: @escaping (URL?) -> Void,
         onPixelSizeChanged: @escaping (CGSize) -> Void,
         onFramesPerSecondChanged: @escaping (Int) -> Void,
         onIdleOpacityDelayChanged: @escaping (Int) -> Void,
@@ -222,7 +231,13 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         self.originYField = NSTextField()
         self.switcherDisplayModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
         self.startupScenePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        self.terminalAdapterPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        self.terminalApplicationNameField = NSTextField(labelWithString: "")
+        self.terminalClearButton = NSButton(
+            title: "清除",
+            target: nil,
+            action: nil
+        )
+        self.terminalApplicationURL = currentTerminalApplicationURL
         self.widthField = NSTextField()
         self.heightField = NSTextField()
         self.framesPerSecondField = NSTextField()
@@ -240,8 +255,8 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         self.onWorkspaceStartupSceneChanged = onWorkspaceStartupSceneChanged
         self.onWorkspaceAutoCollapseChanged = onWorkspaceAutoCollapseChanged
         self.onRecentsChanged = onRecentsChanged
-        self.terminalAdapters = terminalAdapters
-        self.onTerminalAdapterChanged = onTerminalAdapterChanged
+        self.onPickTerminalApplication = onPickTerminalApplication
+        self.onTerminalApplicationChanged = onTerminalApplicationChanged
         self.onPixelSizeChanged = onPixelSizeChanged
         self.onFramesPerSecondChanged = onFramesPerSecondChanged
         self.onIdleOpacityDelayChanged = onIdleOpacityDelayChanged
@@ -249,7 +264,8 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         self.onCustomAppsChanged = onCustomAppsChanged
         self.onWindowClosed = onWindowClosed
 
-        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 825))
+        let contentView = SettingsDocumentView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
         let titleLabel = NSTextField(labelWithString: "Touch Bar 镜像设置")
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
 
@@ -309,12 +325,17 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
 
         workspaceAutoCollapseCheckbox.state = currentWorkspaceAutoCollapse ? .on : .off
 
-        let terminalAdapterLabel = NSTextField(labelWithString: "Claude 终端")
-        terminalAdapterPopup.addItems(withTitles: terminalAdapters.map(\.displayName))
-        terminalAdapterPopup.selectItem(
-            at: terminalAdapters.firstIndex { $0.id == currentTerminalAdapterID } ?? 0
+        let terminalApplicationLabel = NSTextField(labelWithString: "终端")
+        terminalApplicationNameField.lineBreakMode = .byTruncatingMiddle
+        terminalApplicationNameField.setContentCompressionResistancePriority(
+            .defaultLow,
+            for: .horizontal
         )
-
+        let terminalChooseButton = NSButton(
+            title: "选择 App…",
+            target: nil,
+            action: nil
+        )
         let sizeLabel = NSTextField(labelWithString: "窗口像素")
         let multiplicationLabel = NSTextField(labelWithString: "×")
         let pixelsLabel = NSTextField(labelWithString: "px")
@@ -359,16 +380,6 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
 
         let customAppsSectionLabel = NSTextField(labelWithString: "自定义 App")
         customAppsSectionLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        let customAppsHint = NSTextField(
-            labelWithString: """
-            Workspace 右侧最多 3 个常用应用；点图标打开，点齿轮打开本设置。\
-            在此新增、替换或移除（不会自动挤掉已固定的应用）。
-            """
-        )
-        customAppsHint.textColor = .secondaryLabelColor
-        customAppsHint.maximumNumberOfLines = 3
-        customAppsHint.lineBreakMode = .byWordWrapping
-
         customAppsStack.orientation = .vertical
         customAppsStack.alignment = .leading
         customAppsStack.spacing = 8
@@ -376,29 +387,10 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
 
         let recentsSectionLabel = NSTextField(labelWithString: "最近项目")
         recentsSectionLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        let recentsHint = NSTextField(
-            labelWithString: """
-            Workspace 路径区点一下可选择最近用过的项目。\
-            列表会自动记录；也可在此移除或清空。家目录不会出现在列表里。
-            """
-        )
-        recentsHint.textColor = .secondaryLabelColor
-        recentsHint.maximumNumberOfLines = 3
-        recentsHint.lineBreakMode = .byWordWrapping
         recentsStack.orientation = .vertical
         recentsStack.alignment = .leading
         recentsStack.spacing = 8
         recentsStack.translatesAutoresizingMaskIntoConstraints = false
-
-        let hintLabel = NSTextField(
-            labelWithString: """
-            展示位置：固定锚点、上次关闭位置，或自定义窗口左上角（AppKit 坐标，Y 向上）。\
-            切换按钮二选一：物理 Touch Bar 可触摸，或使用独立浮窗。
-            """
-        )
-        hintLabel.textColor = .secondaryLabelColor
-        hintLabel.maximumNumberOfLines = 4
-        hintLabel.lineBreakMode = .byWordWrapping
 
         let positionRow = NSStackView(views: [positionLabel, positionPopup])
         positionRow.orientation = .horizontal
@@ -438,12 +430,17 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         workspaceAutoCollapseRow.spacing = 12
         workspaceAutoCollapseRow.alignment = .centerY
 
-        let terminalAdapterRow = NSStackView(
-            views: [terminalAdapterLabel, terminalAdapterPopup]
+        let terminalApplicationRow = NSStackView(
+            views: [
+                terminalApplicationLabel,
+                terminalApplicationNameField,
+                terminalChooseButton,
+                terminalClearButton,
+            ]
         )
-        terminalAdapterRow.orientation = .horizontal
-        terminalAdapterRow.spacing = 12
-        terminalAdapterRow.alignment = .centerY
+        terminalApplicationRow.orientation = .horizontal
+        terminalApplicationRow.spacing = 8
+        terminalApplicationRow.alignment = .centerY
 
         let sizeRow = NSStackView(
             views: [sizeLabel, widthField, multiplicationLabel, heightField, pixelsLabel]
@@ -474,17 +471,14 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
                 switcherModeRow,
                 startupSceneRow,
                 workspaceAutoCollapseRow,
-                terminalAdapterRow,
+                terminalApplicationRow,
                 sizeRow,
                 framesPerSecondRow,
                 idleOpacityDelayRow,
                 customAppsSectionLabel,
-                customAppsHint,
                 customAppsStack,
                 recentsSectionLabel,
-                recentsHint,
                 recentsStack,
-                hintLabel,
             ]
         )
         stack.orientation = .vertical
@@ -497,7 +491,7 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
             stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
             stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -24),
+            stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -24),
             positionLabel.widthAnchor.constraint(equalToConstant: 72),
             originLabel.widthAnchor.constraint(equalToConstant: 72),
             switcherModeLabel.widthAnchor.constraint(equalToConstant: 72),
@@ -505,37 +499,66 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
             workspaceAutoCollapseRow.arrangedSubviews[0].widthAnchor.constraint(
                 equalToConstant: 72
             ),
-            terminalAdapterLabel.widthAnchor.constraint(equalToConstant: 72),
+            terminalApplicationLabel.widthAnchor.constraint(equalToConstant: 72),
             sizeLabel.widthAnchor.constraint(equalToConstant: 72),
             framesPerSecondLabel.widthAnchor.constraint(equalToConstant: 72),
             idleOpacityDelayLabel.widthAnchor.constraint(equalToConstant: 72),
             positionPopup.widthAnchor.constraint(equalToConstant: 180),
             switcherDisplayModePopup.widthAnchor.constraint(equalToConstant: 180),
             startupScenePopup.widthAnchor.constraint(equalToConstant: 180),
-            terminalAdapterPopup.widthAnchor.constraint(equalToConstant: 180),
+            terminalApplicationNameField.widthAnchor.constraint(greaterThanOrEqualToConstant: 150),
+            terminalApplicationRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             originXField.widthAnchor.constraint(equalToConstant: 70),
             originYField.widthAnchor.constraint(equalToConstant: 70),
             widthField.widthAnchor.constraint(equalToConstant: 90),
             heightField.widthAnchor.constraint(equalToConstant: 70),
             framesPerSecondField.widthAnchor.constraint(equalToConstant: 90),
             idleOpacityDelayField.widthAnchor.constraint(equalToConstant: 90),
-            customAppsHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
             customAppsStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            recentsHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
             recentsStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            hintLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+
+        let initialContentRect = NSRect(x: 0, y: 0, width: 560, height: 720)
+        let scrollView = NSScrollView(frame: initialContentRect)
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.documentView = contentView
+        NSLayoutConstraint.activate([
+            contentView.leadingAnchor.constraint(
+                equalTo: scrollView.contentView.leadingAnchor
+            ),
+            contentView.topAnchor.constraint(
+                equalTo: scrollView.contentView.topAnchor
+            ),
+            contentView.widthAnchor.constraint(
+                equalTo: scrollView.contentView.widthAnchor
+            ),
+            contentView.heightAnchor.constraint(
+                greaterThanOrEqualTo: scrollView.contentView.heightAnchor
+            ),
         ])
 
         let window = NSWindow(
-            contentRect: contentView.frame,
-            styleMask: [.titled, .closable],
+            contentRect: initialContentRect,
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "ToubarReplace 设置"
-        window.contentView = contentView
+        window.contentView = scrollView
         window.isReleasedWhenClosed = false
-        window.center()
+        window.contentMinSize = NSSize(width: 480, height: 480)
+        let restoredFrame = window.setFrameUsingName(
+            TouchBarPreferences.settingsWindowAutosaveName
+        )
+        window.setFrameAutosaveName(
+            TouchBarPreferences.settingsWindowAutosaveName
+        )
+        if !restoredFrame {
+            window.center()
+        }
 
         super.init(window: window)
         window.delegate = self
@@ -551,8 +574,11 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
         startupScenePopup.action = #selector(startupSceneChanged(_:))
         workspaceAutoCollapseCheckbox.target = self
         workspaceAutoCollapseCheckbox.action = #selector(workspaceAutoCollapseChanged(_:))
-        terminalAdapterPopup.target = self
-        terminalAdapterPopup.action = #selector(terminalAdapterChanged(_:))
+        terminalChooseButton.target = self
+        terminalChooseButton.action = #selector(chooseTerminalApplication(_:))
+        terminalClearButton.target = self
+        terminalClearButton.action = #selector(clearTerminalApplication(_:))
+        updateTerminalApplicationDisplay()
         widthField.target = self
         widthField.action = #selector(pixelSizeChanged(_:))
         heightField.target = self
@@ -634,10 +660,33 @@ final class TouchBarSettingsWindowController: NSWindowController, NSWindowDelega
     }
 
     @objc
-    private func terminalAdapterChanged(_ sender: NSPopUpButton) {
-        let itemIndex = sender.indexOfSelectedItem
-        guard terminalAdapters.indices.contains(itemIndex) else { return }
-        onTerminalAdapterChanged(terminalAdapters[itemIndex].id)
+    private func chooseTerminalApplication(_ sender: NSButton) {
+        onPickTerminalApplication { [weak self] applicationURL in
+            guard let self, let applicationURL else { return }
+            terminalApplicationURL = applicationURL.standardizedFileURL
+            onTerminalApplicationChanged(terminalApplicationURL)
+            updateTerminalApplicationDisplay()
+        }
+    }
+
+    @objc
+    private func clearTerminalApplication(_ sender: NSButton) {
+        terminalApplicationURL = nil
+        onTerminalApplicationChanged(nil)
+        updateTerminalApplicationDisplay()
+    }
+
+    private func updateTerminalApplicationDisplay() {
+        if let terminalApplicationURL {
+            terminalApplicationNameField.stringValue =
+                terminalApplicationURL.lastPathComponent
+            terminalApplicationNameField.toolTip = terminalApplicationURL.path
+            terminalClearButton.isEnabled = true
+        } else {
+            terminalApplicationNameField.stringValue = "未选择"
+            terminalApplicationNameField.toolTip = nil
+            terminalClearButton.isEnabled = false
+        }
     }
 
     @objc

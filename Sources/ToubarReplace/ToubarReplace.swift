@@ -136,9 +136,9 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
             ?? WorkspacePreferences.startupScene
         let autoCollapse = windowController?.workspaceAutoCollapse
             ?? WorkspacePreferences.autoCollapse
-        let adapters = windowController?.availableTerminalAdapters ?? []
-        let adapterID = windowController?.workspaceTerminalAdapterID
-            ?? WorkspacePreferences.terminalAdapterID
+        let terminalApplicationURL =
+            windowController?.workspaceTerminalApplicationURL
+            ?? WorkspacePreferences.terminalApplicationURL
         return TouchBarSettingsWindowController(
             currentPosition: position,
             currentCustomTopLeft: customTopLeft,
@@ -148,8 +148,7 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
             currentWorkspaceSwitcherFloats: switcherFloats,
             currentWorkspaceStartupScene: startupScene,
             currentWorkspaceAutoCollapse: autoCollapse,
-            terminalAdapters: adapters,
-            currentTerminalAdapterID: adapterID,
+            currentTerminalApplicationURL: terminalApplicationURL,
             onPositionChanged: { [weak self] position in
                 self?.windowController?.setDisplayPosition(position)
                 if let topLeft = self?.windowController?.customTopLeft {
@@ -169,8 +168,13 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                 self?.windowController?.setWorkspaceAutoCollapse(autoCollapse)
             },
             onRecentsChanged: {},
-            onTerminalAdapterChanged: { [weak self] adapterID in
-                self?.windowController?.setWorkspaceTerminalAdapterID(adapterID)
+            onPickTerminalApplication: { [weak self] completion in
+                self?.chooseTerminalApplication(completion: completion)
+            },
+            onTerminalApplicationChanged: { [weak self] applicationURL in
+                self?.windowController?.setWorkspaceTerminalApplicationURL(
+                    applicationURL
+                )
             },
             onPixelSizeChanged: { [weak self] pixelSize in
                 self?.windowController?.setMirrorPixelSize(pixelSize)
@@ -301,6 +305,73 @@ final class ToubarReplaceAppDelegate: NSObject, NSApplicationDelegate {
                 self?.windowController?.ensurePhysicalSwitcherPresented()
                 completion(applicationURL)
             }
+        }
+    }
+
+    private func chooseTerminalApplication(
+        completion: @escaping (URL?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.title = "选择终端应用"
+        panel.prompt = "选择"
+        panel.message = "请选择 Otty、Ghostty 或系统 Terminal.app"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = WorkspacePreferences.terminalApplicationURL?
+            .deletingLastPathComponent()
+            ?? URL(fileURLWithPath: "/Applications", isDirectory: true)
+
+        let handleResponse: (NSApplication.ModalResponse) -> Void = {
+            [weak self] response in
+            Task { @MainActor in
+                guard response == .OK, let applicationURL = panel.url else {
+                    completion(nil)
+                    return
+                }
+                guard
+                    self?.windowController?.supportsTerminalApplication(
+                        at: applicationURL
+                    ) == true
+                else {
+                    self?.showUnsupportedTerminalAlert()
+                    completion(nil)
+                    return
+                }
+                completion(applicationURL.standardizedFileURL)
+            }
+        }
+
+        if let settingsWindow = settingsWindowController?.window,
+            settingsWindow.isVisible
+        {
+            panel.beginSheetModal(
+                for: settingsWindow,
+                completionHandler: handleResponse
+            )
+        } else {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            panel.begin(completionHandler: handleResponse)
+        }
+    }
+
+    private func showUnsupportedTerminalAlert() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "不支持这个终端应用"
+        alert.informativeText =
+            "目前请选择 Otty、Ghostty 1.3 或系统自带的 Terminal.app。"
+        alert.addButton(withTitle: "好")
+        if let settingsWindow = settingsWindowController?.window,
+            settingsWindow.isVisible
+        {
+            alert.beginSheetModal(for: settingsWindow)
+        } else {
+            alert.runModal()
         }
     }
 

@@ -632,8 +632,25 @@ enum ToubarReplaceSmokeTest {
             failures: &failures
         )
         expect(
-            TerminalAdapterID.allCases == [.otty, .terminal],
+            TerminalAdapterID.allCases == [.otty, .terminal, .ghostty],
             "supported terminal adapter ordering changed unexpectedly",
+            failures: &failures
+        )
+        expect(
+            TouchBarPreferences.settingsWindowAutosaveName
+                == "ToubarReplaceSettingsWindow",
+            "settings window resize persistence name changed unexpectedly",
+            failures: &failures
+        )
+        let terminalAdapterRegistry = TerminalAdapterRegistry()
+        let systemTerminalURL = URL(
+            fileURLWithPath: "/System/Applications/Utilities/Terminal.app",
+            isDirectory: true
+        )
+        expect(
+            terminalAdapterRegistry.adapter(for: systemTerminalURL)?.id
+                == .terminal,
+            "user-selected Terminal.app must resolve to its launch adapter",
             failures: &failures
         )
         expect(
@@ -769,6 +786,30 @@ enum ToubarReplaceSmokeTest {
                     "do script shellCommand in targetTab"
                 ),
             "Terminal launch must reuse its cold-start window or add a tab",
+            failures: &failures
+        )
+        let ghosttyArguments = TerminalLaunchCommand
+            .ghosttyAppleScriptArguments(
+                toolURL: testToolURL,
+                projectDirectory: testProjectURL
+            )
+        expect(
+            ghosttyArguments.count == 4
+                && ghosttyArguments[1].contains(
+                    "set initial working directory of cfg to projectPath"
+                )
+                && ghosttyArguments[1].contains(
+                    "set command of cfg to commandText"
+                )
+                && ghosttyArguments[1].contains(
+                    "new tab in front window with configuration cfg"
+                )
+                && ghosttyArguments[1].contains(
+                    "new window with configuration cfg"
+                )
+                && ghosttyArguments[2].contains("/bin/zsh -lc")
+                && ghosttyArguments[3] == "/tmp/Project Folder",
+            "Ghostty launch must create a configured tab or window",
             failures: &failures
         )
         expect(

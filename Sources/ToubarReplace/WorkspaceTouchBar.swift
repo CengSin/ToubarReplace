@@ -1274,7 +1274,10 @@ enum WorkspacePresentationModePolicy {
         guard currentMode == workspaceMode else {
             return .preserveCurrent
         }
-        if hadPreviousMode, let previousMode {
+        // "app" as the saved previous mode is our own Workspace write, not a
+        // user choice to hide Control Strip. Restoring it would leave 显示功能栏
+        // off after switching to mirror.
+        if hadPreviousMode, let previousMode, previousMode != workspaceMode {
             return .set(previousMode)
         }
         return .remove

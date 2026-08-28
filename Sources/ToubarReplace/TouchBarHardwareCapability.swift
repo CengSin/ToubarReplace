@@ -103,3 +103,19 @@ enum TouchBarResumePolicy {
             : .restartHardwareCapture
     }
 }
+
+enum WorkspaceSleepPausePolicy {
+    /// Sleep/lock fires several notifications. The first one latches whether
+    /// we were in Workspace; later ones must not see the torn-down scene and
+    /// overwrite that latch (that used to wake into mirror).
+    static func latchedResumeToWorkspace(
+        alreadyPaused: Bool,
+        latchedResume: Bool,
+        sceneIsWorkspace: Bool
+    ) -> Bool {
+        if alreadyPaused {
+            return latchedResume
+        }
+        return sceneIsWorkspace || latchedResume
+    }
+}

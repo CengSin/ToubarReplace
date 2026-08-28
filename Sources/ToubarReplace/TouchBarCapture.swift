@@ -91,6 +91,14 @@ enum TouchBarPresentationPreferences {
         }
         CFPreferencesAppSynchronize(applicationIdentifier as CFString)
     }
+
+    /// Mirror must not stay in Workspace's `"app"` mode (Control Strip off).
+    /// Only heals that leftover; does not write a mode if the key is already
+    /// something else.
+    static func clearWorkspaceAppModeIfPresent(workspaceMode: String) {
+        guard currentMode == workspaceMode else { return }
+        setCurrentMode(nil)
+    }
 }
 
 enum TouchBarSystemState {

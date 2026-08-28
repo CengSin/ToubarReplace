@@ -631,6 +631,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var finderSyncTask: Task<Void, Never>?
     private var resumeToWorkspace = false
+    /// Sleep/lock fires multiple notifications; true after the first pause
+    /// so later ones cannot rewrite `resumeToWorkspace` from the torn-down scene.
+    private var isHardwareSessionPaused = false
     private var isRunning = false
     private var lastFrontmostContext: FrontmostAppContext?
     private var currentWorkspaceContext: WorkspaceContext?
@@ -1172,6 +1175,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
             switcherTouchBarController.dismiss()
             return
         }
+        TouchBarPresentationPreferences.clearWorkspaceAppModeIfPresent(
+            workspaceMode: WorkspaceTouchBarLayout.presentationMode
+        )
         switcherTouchBarController.present()
     }
 
@@ -1302,6 +1308,9 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
         guard rootView.scene == .workspace else { return }
         // Software mode never presents a system modal; ignore hardware interrupts.
         guard !usesSoftwareWorkspace else { return }
+        // Sleep also detaches the modal. Remember we were in Workspace so wake
+        // can restore it instead of treating this as a user switch to mirror.
+        resumeToWorkspace = true
         cancelWorkspaceAsyncWork(invalidateSession: true)
         rootView.beginSceneTransitionCover()
         finderSyncTask?.cancel()
@@ -1621,9 +1630,21 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 ) { [weak self] _ in
                     Task { @MainActor [weak self] in
                         guard let self, self.isRunning else { return }
-                        self.resumeToWorkspace = self.rootView.scene == .workspace
-                        if self.rootView.scene == .workspace {
-                            self.closeWorkspace()
+                        self.resumeToWorkspace =
+                            WorkspaceSleepPausePolicy.latchedResumeToWorkspace(
+                                alreadyPaused: self.isHardwareSessionPaused,
+                                latchedResume: self.resumeToWorkspace,
+                                sceneIsWorkspace: self.rootView.scene
+                                    == .workspace
+                            )
+                        self.isHardwareSessionPaused = true
+                        if self.rootView.scene == .workspace,
+                           !self.usesSoftwareWorkspace
+                        {
+                            // Tear down the full-width modal and restore
+                            // PresentationMode, but do not switch the scene to
+                            // mirror — sleep is not a user toggle.
+                            self.workspaceTouchBarController.dismiss()
                         }
                         self.switcherTouchBarController.dismiss()
                         self.capture.stop()
@@ -1641,6 +1662,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                 ) { [weak self] _ in
                     Task { @MainActor [weak self] in
                         guard let self, self.isRunning else { return }
+                        self.isHardwareSessionPaused = false
                         switch TouchBarResumePolicy.action(
                             usesSoftwareWorkspace: self.usesSoftwareWorkspace,
                             restoreWorkspace: self.resumeToWorkspace
@@ -1654,9 +1676,7 @@ final class TouchBarWindowController: NSWindowController, NSWindowDelegate {
                             self.presentPhysicalSwitcherIfNeeded()
                         case .restoreHardwareWorkspace:
                             self.capture.restart()
-                            if self.rootView.scene != .workspace {
-                                self.enterHardwareWorkspace(isLaunch: true)
-                            }
+                            self.enterHardwareWorkspace(isLaunch: true)
                         }
                         self.resumeToWorkspace = false
                     }

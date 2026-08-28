@@ -123,6 +123,16 @@ enum ToubarReplaceSmokeTest {
             failures: &failures
         )
         expect(
+            WorkspacePresentationModePolicy.dismissalAction(
+                currentMode: "app",
+                workspaceMode: "app",
+                previousMode: "app",
+                hadPreviousMode: true
+            ) == .remove,
+            "closing Workspace must not restore our own app mode leftover",
+            failures: &failures
+        )
+        expect(
             CustomWorkspaceAppList.maxCount == 3,
             "Workspace custom apps must cap at three favorites",
             failures: &failures
@@ -1178,6 +1188,25 @@ enum ToubarReplaceSmokeTest {
                 restoreWorkspace: true
             ) == .restoreHardwareWorkspace,
             "物理栏从 Workspace 睡眠后要重新 present Workspace",
+            failures: &failures
+        )
+        expect(
+            WorkspaceSleepPausePolicy.latchedResumeToWorkspace(
+                alreadyPaused: false,
+                latchedResume: false,
+                sceneIsWorkspace: true
+            )
+                && WorkspaceSleepPausePolicy.latchedResumeToWorkspace(
+                    alreadyPaused: true,
+                    latchedResume: true,
+                    sceneIsWorkspace: false
+                )
+                && !WorkspaceSleepPausePolicy.latchedResumeToWorkspace(
+                    alreadyPaused: false,
+                    latchedResume: false,
+                    sceneIsWorkspace: false
+                ),
+            "睡眠多次通知不能把 Workspace 唤醒闩锁冲成镜像",
             failures: &failures
         )
         expect(
